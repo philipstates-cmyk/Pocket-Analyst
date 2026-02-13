@@ -1,12 +1,57 @@
 import streamlit as st
 import yfinance as yf
 import pandas as pd
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 
 # --- Page Configuration ---
 st.set_page_config(page_title="Philip's Pocket Analyst", layout="wide")
 
 st.title("📱 Philip's Pocket Analyst")
 st.markdown("### Buy, Sell, or Hold Decision Engine")
+
+# --- Helper Function: Create Pro Chart ---
+def create_chart(ticker):
+    """
+    Generates a professional Candlestick + Volume chart using Plotly.
+    """
+    # Fetch 6 months of data
+    df = yf.Ticker(ticker).history(period="6mo")
+    
+    # Create a figure with 2 subplots (Price on top, Volume on bottom)
+    fig = make_subplots(
+        rows=2, cols=1, 
+        shared_xaxes=True, 
+        vertical_spacing=0.05, 
+        subplot_titles=(f"{ticker} Price Action", "Volume"),
+        row_heights=[0.7, 0.3] # Price gets 70% of space, Volume gets 30%
+    )
+
+    # 1. Candlestick Chart
+    fig.add_trace(go.Candlestick(
+        x=df.index,
+        open=df['Open'], high=df['High'],
+        low=df['Low'], close=df['Close'],
+        name="Price"
+    ), row=1, col=1)
+
+    # 2. Volume Chart
+    fig.add_trace(go.Bar(
+        x=df.index, 
+        y=df['Volume'], 
+        name="Volume",
+        marker_color='rgba(100, 100, 255, 0.5)' # Light blue
+    ), row=2, col=1)
+
+    # Layout Customization (Make it look like a trading app)
+    fig.update_layout(
+        height=600, 
+        xaxis_rangeslider_visible=False, # Hide the slider (annoying on mobile)
+        showlegend=False,
+        margin=dict(l=20, r=20, t=40, b=20)
+    )
+    
+    return fig
 
 # --- 1. The Scoring Engine ---
 def analyze_stock(ticker):
@@ -28,7 +73,7 @@ def analyze_stock(ticker):
         profit_margin = info.get('profitMargins', 0)
         rev_growth = info.get('revenueGrowth', 0)
         debt_to_equity = info.get('debtToEquity', None)
-        target_price = info.get('targetMeanPrice', None) # NEW: Analyst Target
+        target_price = info.get('targetMeanPrice', None)
         
         score = 0
         reasons = []
@@ -84,8 +129,8 @@ def analyze_stock(ticker):
             "Score": score,
             "Verdict": verdict,
             "Trend": trend_status,
-            "Target Price": target_price, # Passing this to the UI
-            "Upside %": upside,           # Passing this to the UI
+            "Target Price": target_price,
+            "Upside %": upside,
             "Key Strengths": ", ".join(reasons)
         }
         
@@ -132,7 +177,7 @@ if st.button("🔄 Analyze Watchlist Now"):
             use_container_width=True
         )
 
-        # --- NEW: Top Pick Deep Dive (Chart + Analyst Targets) ---
+        # --- NEW: Top Pick Deep Dive (Professional Charts) ---
         st.markdown("---")
         
         top_stock = df.iloc[0]
@@ -143,31 +188,27 @@ if st.button("🔄 Analyze Watchlist Now"):
         col1, col2 = st.columns([2, 1])
         
         with col1:
-            st.write("**6-Month Price Trend**")
-            chart_data = yf.Ticker(top_ticker).history(period="6mo")
-            st.line_chart(chart_data['Close'])
+            # RENDER THE NEW CHART HERE
+            st.write("**Technical Analysis (6 Months)**")
+            fig = create_chart(top_ticker)
+            st.plotly_chart(fig, use_container_width=True)
             
         with col2:
             st.write("**Wall St. Analyst Targets**")
             
-            # Use the data we already fetched!
             target = top_stock['Target Price']
             upside = top_stock['Upside %']
             price = top_stock['Price']
             
             if target and target > 0:
-                # Color code the upside
-                color = "normal"
-                if upside > 10: color = "normal" # Streamlit metric handles green automatically for positive delta
-                
                 st.metric(
                     label="Average Price Target",
                     value=f"${target:.2f}",
                     delta=f"{upside:.2f}% Upside"
                 )
-                st.write(f"Analysts think {top_ticker} is worth **${target:.2f}**. It is currently trading at **${price:.2f}**.")
+                st.write(f"Analysts think {top_ticker} is worth **${target:.2f}**.")
             else:
-                st.warning("No analyst targets available for this stock.")
+                st.warning("No analyst targets available.")
                 
     else:
         st.warning("No data found.")
