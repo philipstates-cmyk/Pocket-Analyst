@@ -80,7 +80,7 @@ def get_news_sentiment(ticker):
         
         for item in news[:5]: 
             title = item.get('title', '')
-            link = item.get('link', '#') # Grab the URL
+            link = item.get('link', '#')
             
             if title:
                 blob = TextBlob(title)
@@ -200,4 +200,90 @@ with st.sidebar:
     watchlist_names = list(st.session_state.watchlists.keys())
     selected_list_name = st.selectbox("Select Watchlist", watchlist_names, index=watchlist_names.index(st.session_state.active_list))
     st.session_state.active_list = selected_list_name
-    current_tickers
+    
+    # --- THIS WAS THE BROKEN LINE ---
+    current_tickers = st.session_state.watchlists[st.session_state.active_list]
+    # --------------------------------
+    
+    st.code(", ".join(current_tickers))
+    st.divider()
+    new_ticker = st.text_input("Add Ticker").upper()
+    if st.button("Add Stock"):
+        if new_ticker and new_ticker not in current_tickers:
+            st.session_state.watchlists[st.session_state.active_list].append(new_ticker)
+            st.rerun()
+
+# --- 5. Main Dashboard ---
+st.title(f"📱 Pocket Analyst: {st.session_state.active_list}")
+
+if not current_tickers:
+    st.warning("Empty Watchlist!")
+    st.stop()
+
+tab1, tab2, tab3, tab4 = st.tabs(["📊 Analysis", "🔗 Risk & Sectors", "💎 Valuation Models", "🔙 Backtest"])
+
+with tab1:
+    results = []
+    with st.spinner("Analyzing..."):
+        for ticker in current_tickers:
+            data = analyze_stock(ticker)
+            if data: results.append(data)
+    
+    if results:
+        df = pd.DataFrame(results)
+        df = df.sort_values(by="Score", ascending=False)
+        st.info("👇 Select a stock to view details (Selection syncs to Valuation Tab)")
+        
+        selection = st.dataframe(
+            df,
+            column_order=("Ticker", "Verdict", "Score", "Trend", "Price", "Sector", "Upside %"),
+            hide_index=True,
+            use_container_width=True,
+            on_select="rerun",
+            selection_mode="single-row"
+        )
+        
+        # --- ROBUST SELECTION LOGIC ---
+        if st.session_state.selected_ticker is None and not df.empty:
+            st.session_state.selected_ticker = df.iloc[0]['Ticker']
+
+        if selection.selection.rows:
+            idx = selection.selection.rows[0]
+            selected_row = df.iloc[idx]
+            st.session_state.selected_ticker = selected_row['Ticker']
+            
+        if st.session_state.selected_ticker in df['Ticker'].values:
+            display_row = df[df['Ticker'] == st.session_state.selected_ticker].iloc[0]
+            
+            ticker = display_row['Ticker']
+            sector = display_row['Sector']
+            etf = display_row['Sector ETF']
+            st.divider()
+            st.subheader(f"🏆 Deep Dive: {ticker} vs. {sector} ({etf})")
+            c1, c2 = st.columns([2, 1])
+            with c1: st.plotly_chart(create_chart(ticker), use_container_width=True)
+            with c2:
+                st.write("**🤖 AI News Sentiment**")
+                sentiment, headlines = get_news_sentiment(ticker)
+                
+                if sentiment > 0.1: st.success(f"😊 Positive ({sentiment:.2f})")
+                elif sentiment < -0.1: st.error(f"😡 Negative ({sentiment:.2f})")
+                else: st.warning(f"😐 Neutral ({sentiment:.2f})")
+                
+                st.write("**Latest Headlines:**")
+                for h in headlines[:3]:
+                    icon = "🟢" if h['score'] > 0 else "🔴" if h['score'] < 0 else "⚪"
+                    st.markdown(f"[{icon} {h['title']}]({h['link']})")
+
+                st.write("---")
+                alpha = display_row['Alpha']
+                if alpha > 0: st.success(f"🚀 Beating Sector by {alpha:.1f}%")
+                else: st.error(f"🐢 Lagging Sector by {abs(alpha):.1f}%")
+
+with tab2: # Risk Tab
+    st.subheader("⚠️ Sector Power Rankings")
+    if results:
+        sector_df = pd.DataFrame(results).groupby("Sector")['Score'].mean().reset_index().sort_values("Score", ascending=False)
+        fig_sec = px.bar(
+            sector_df, x="Score", y="Sector", orientation='h', color="Score", 
+            color_continuous_scale=["red", "yellow", "green"], range_color=[0, 100], text_auto
