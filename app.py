@@ -19,9 +19,9 @@ if 'watchlists' not in st.session_state:
 if 'active_list' not in st.session_state:
     st.session_state.active_list = 'Default'
 
-# --- NEW: Global Ticker Selection State ---
+# Ensure selected_ticker always exists
 if 'selected_ticker' not in st.session_state:
-    st.session_state.selected_ticker = st.session_state.watchlists['Default'][0]
+    st.session_state.selected_ticker = None 
 
 # --- 2. Sector Mapping ---
 SECTOR_MAP = {
@@ -35,6 +35,8 @@ SECTOR_MAP = {
 def create_chart(ticker):
     """Generates a professional Candlestick + Volume chart."""
     df = yf.Ticker(ticker).history(period="6mo")
+    if df.empty: return go.Figure()
+    
     fig = make_subplots(
         rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.05, 
         subplot_titles=(f"{ticker} Price Action", "Volume"), row_heights=[0.7, 0.3] 
@@ -132,7 +134,7 @@ def get_valuation_models(ticker):
         models = {}
         
         # 1. Graham Number
-        if eps > 0 and book_value > 0:
+        if eps and eps > 0 and book_value and book_value > 0:
             graham_val = np.sqrt(22.5 * eps * book_value)
             models['Graham Number'] = graham_val
         else:
@@ -140,7 +142,7 @@ def get_valuation_models(ticker):
             
         # 2. Peter Lynch
         growth_rate_whole = min(growth_est * 100, 25) 
-        if eps > 0 and growth_rate_whole > 0:
+        if eps and eps > 0 and growth_rate_whole > 0:
             lynch_val = eps * growth_rate_whole
             models['Peter Lynch Value'] = lynch_val
         else:
@@ -214,25 +216,21 @@ with tab1:
             selection_mode="single-row"
         )
         
-        # --- SYNCHRONIZATION LOGIC ---
-        # 1. Did user click a row?
+        # --- ROBUST SELECTION LOGIC ---
+        # 1. Default to first ticker if nothing selected
+        if st.session_state.selected_ticker is None and not df.empty:
+            st.session_state.selected_ticker = df.iloc[0]['Ticker']
+
+        # 2. Update if user clicked a row
         if selection.selection.rows:
             idx = selection.selection.rows[0]
             selected_row = df.iloc[idx]
-            # UPDATE SESSION STATE WITH CLICKED TICKER
             st.session_state.selected_ticker = selected_row['Ticker']
-        
-        # 2. If not, fallback to default (or keep existing selection if valid)
-        elif st.session_state.selected_ticker not in df['Ticker'].values:
-             if not df.empty:
-                st.session_state.selected_ticker = df.iloc[0]['Ticker']
-
-        # 3. Retrieve Data for the Selected Ticker
-        # We find the row in our dataframe that matches the session state ticker
-        display_row = df[df['Ticker'] == st.session_state.selected_ticker].iloc[0]
-        
-        # --- RENDER DEEP DIVE ---
-        if display_row is not None:
+            
+        # 3. Retrieve Data for Display
+        if st.session_state.selected_ticker in df['Ticker'].values:
+            display_row = df[df['Ticker'] == st.session_state.selected_ticker].iloc[0]
+            
             ticker = display_row['Ticker']
             sector = display_row['Sector']
             etf = display_row['Sector ETF']
@@ -250,17 +248,72 @@ with tab2: # Risk Tab
     st.subheader("⚠️ Sector Power Rankings")
     if results:
         sector_df = pd.DataFrame(results).groupby("Sector")['Score'].mean().reset_index().sort_values("Score", ascending=False)
-        
-        # This was the broken part. Replace it with this complete block:
         fig_sec = px.bar(
-            sector_df, 
-            x="Score", 
-            y="Sector", 
-            orientation='h', 
-            color="Score", 
-            color_continuous_scale=["red", "yellow", "green"], 
-            range_color=[0, 100], 
-            text_auto=True
+            sector_df, x="Score", y="Sector", orientation='h', color="Score", 
+            color_continuous_scale=["red", "yellow", "green"], range_color=[0, 100], text_auto=True
         )
-        
         st.plotly_chart(fig_sec, use_container_width=True)
+
+with tab3: # VALUATION TAB (Fixed)
+    val_ticker = st.session_state.selected_ticker
+    
+    # Fallback if state is missing
+    if not val_ticker and current_tickers:
+        val_ticker = current_tickers[0]
+
+    st.subheader(f"💎 Triangulated Valuation: {val_ticker}")
+    st.caption("Auto-selected from Analysis Tab")
+
+    if val_ticker:
+        models, price, implied_growth = get_valuation_models(val_ticker)
+        
+        col_v1, col_v2, col_v3 = st.columns(3)
+        
+        with col_v1:
+            st.markdown("##### 1. Graham Number")
+            st.caption("Best for Stable/Value Stocks")
+            g_val = models.get('Graham Number')
+            if g_val:
+                delta = ((g_val - price) / price) * 100
+                st.metric("Conservative Value", f"${g_val:.2f}", f"{delta:.1f}%")
+            else:
+                st.warning("N/A (Negative Earnings/Book)")
+                
+        with col_v2:
+            st.markdown("##### 2. Peter Lynch Value")
+            st.caption("Best for Growth Stocks")
+            l_val = models.get('Peter Lynch Value')
+            if l_val:
+                delta = ((l_val - price) / price) * 100
+                st.metric("Fair Growth Value", f"${l_val:.2f}", f"{delta:.1f}%")
+            else:
+                st.warning("N/A (No Growth Data)")
+
+        with col_v3:
+            st.markdown("##### 3. DCF (Cash Flow)")
+            st.caption("Intrinsic Value")
+            dcf_growth = st.slider(f"Expected Growth", 0.0, 0.25, float(implied_growth), 0.01)
+            dcf_val = calculate_dcf(val_ticker, dcf_growth)
+            if dcf_val:
+                delta = ((dcf_val - price) / price) * 100
+                st.metric("DCF Value", f"${dcf_val:.2f}", f"{delta:.1f}%")
+            else:
+                st.warning("N/A (No Cash Flow)")
+
+with tab4: # BACKTEST TAB (Fixed)
+    st.subheader("📜 1-Year Backtest")
+    if current_tickers:
+        try:
+            # Download data
+            data = yf.download(current_tickers, period="1y", progress=False)
+            
+            # Robust Check: Did we get 'Close' data?
+            if 'Close' in data.columns:
+                close_data = data['Close']
+                st.line_chart(close_data)
+            else:
+                # Fallback for single ticker or flat structure
+                st.line_chart(data)
+                
+        except Exception as e:
+            st.error(f"Could not load backtest data: {e}")
