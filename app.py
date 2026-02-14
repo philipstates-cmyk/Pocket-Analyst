@@ -2,59 +2,62 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 import plotly.graph_objects as go
+import plotly.express as px
 from plotly.subplots import make_subplots
+import numpy as np
 
 # --- Page Configuration ---
-st.set_page_config(page_title="Philip's Pocket Analyst", layout="wide")
+st.set_page_config(page_title="Philip's Pocket Analyst Pro", layout="wide")
 
-st.title("📱 Philip's Pocket Analyst")
-st.markdown("### Buy, Sell, or Hold Decision Engine")
+# --- 1. Session State & Watchlist Management ---
+# We upgraded this to support multiple lists (e.g., "High Risk", "Safe", "Tech")
+if 'watchlists' not in st.session_state:
+    st.session_state.watchlists = {
+        'Default': ['NVDA', 'INTC', 'MSFT', 'F', 'GOOGL'],
+        'High Growth': ['TSLA', 'COIN', 'PLTR'],
+        'Safe Dividend': ['KO', 'JNJ', 'PG', 'VZ']
+    }
+if 'active_list' not in st.session_state:
+    st.session_state.active_list = 'Default'
 
-# --- Helper Function: Create Pro Chart ---
+# --- 2. Helper Functions (YOUR CORE LOGIC) ---
+
 def create_chart(ticker):
     """
     Generates a professional Candlestick + Volume chart using Plotly.
+    (Preserved from your original code)
     """
-    # Fetch 6 months of data
     df = yf.Ticker(ticker).history(period="6mo")
     
-    # Create a figure with 2 subplots (Price on top, Volume on bottom)
     fig = make_subplots(
         rows=2, cols=1, 
         shared_xaxes=True, 
         vertical_spacing=0.05, 
         subplot_titles=(f"{ticker} Price Action", "Volume"),
-        row_heights=[0.7, 0.3] # Price gets 70% of space, Volume gets 30%
+        row_heights=[0.7, 0.3] 
     )
 
-    # 1. Candlestick Chart
     fig.add_trace(go.Candlestick(
-        x=df.index,
-        open=df['Open'], high=df['High'],
-        low=df['Low'], close=df['Close'],
-        name="Price"
+        x=df.index, open=df['Open'], high=df['High'],
+        low=df['Low'], close=df['Close'], name="Price"
     ), row=1, col=1)
 
-    # 2. Volume Chart
     fig.add_trace(go.Bar(
-        x=df.index, 
-        y=df['Volume'], 
-        name="Volume",
-        marker_color='rgba(100, 100, 255, 0.5)' # Light blue
+        x=df.index, y=df['Volume'], name="Volume",
+        marker_color='rgba(100, 100, 255, 0.5)'
     ), row=2, col=1)
 
-    # Layout Customization (Make it look like a trading app)
     fig.update_layout(
-        height=600, 
-        xaxis_rangeslider_visible=False, # Hide the slider (annoying on mobile)
-        showlegend=False,
-        margin=dict(l=20, r=20, t=40, b=20)
+        height=600, xaxis_rangeslider_visible=False, 
+        showlegend=False, margin=dict(l=20, r=20, t=40, b=20)
     )
-    
     return fig
 
-# --- 1. The Scoring Engine ---
 def analyze_stock(ticker):
+    """
+    Your custom Buy/Sell/Hold logic.
+    (Preserved exactly as you wrote it)
+    """
     try:
         stock = yf.Ticker(ticker)
         info = stock.info
@@ -137,80 +140,222 @@ def analyze_stock(ticker):
     except Exception as e:
         return None
 
-# --- 2. Watchlist Management ---
-if 'watchlist' not in st.session_state:
-    st.session_state.watchlist = ['NVDA', 'INTC', 'MSFT', 'F', 'GOOGL']
+def calculate_dcf(ticker, growth_rate=0.03, discount_rate=0.10, years=5):
+    """New Helper: Automated DCF Calculation"""
+    try:
+        stock = yf.Ticker(ticker)
+        info = stock.info
+        fcf = info.get('freeCashFlow', info.get('operatingCashflows', None))
+        shares = info.get('sharesOutstanding', 1)
+        if fcf is None or shares is None: return None
 
-with st.sidebar:
-    st.header("My Watchlist")
-    new_ticker = st.text_input("Add Ticker (e.g., AMD):").upper()
-    if st.button("Add"):
-        if new_ticker and new_ticker not in st.session_state.watchlist:
-            st.session_state.watchlist.append(new_ticker)
+        future_fcf = []
+        for i in range(1, years + 1):
+            fcf = fcf * (1 + growth_rate)
+            future_fcf.append(fcf / ((1 + discount_rate) ** i))
             
-    if st.button("Clear List"):
-        st.session_state.watchlist = []
+        terminal_value = (fcf * (1 + 0.02)) / (discount_rate - 0.02)
+        pv_terminal = terminal_value / ((1 + discount_rate) ** years)
+        total_value = sum(future_fcf) + pv_terminal
+        return total_value / shares
+    except:
+        return None
 
-# --- 3. Main Dashboard ---
-if st.button("🔄 Analyze Watchlist Now"):
-    results = []
-    progress_bar = st.progress(0)
+# --- 3. Sidebar: Portfolio Manager ---
+with st.sidebar:
+    st.title("📂 Portfolio Manager")
     
-    for i, ticker in enumerate(st.session_state.watchlist):
-        data = analyze_stock(ticker)
-        if data:
-            results.append(data)
-        progress_bar.progress((i + 1) / len(st.session_state.watchlist))
-        
+    # Watchlist Selector
+    watchlist_names = list(st.session_state.watchlists.keys())
+    selected_list_name = st.selectbox("Select Watchlist", watchlist_names, index=watchlist_names.index(st.session_state.active_list))
+    st.session_state.active_list = selected_list_name
+    
+    current_tickers = st.session_state.watchlists[st.session_state.active_list]
+    
+    st.write(f"**Current Tickers:**")
+    st.code(", ".join(current_tickers))
+    
+    st.divider()
+    
+    # Add Ticker
+    new_ticker = st.text_input("Add Ticker").upper()
+    if st.button("Add Stock"):
+        if new_ticker and new_ticker not in current_tickers:
+            st.session_state.watchlists[st.session_state.active_list].append(new_ticker)
+            st.rerun()
+            
+    # Create New List
+    st.divider()
+    new_list_name = st.text_input("New Watchlist Name")
+    if st.button("Create List"):
+        if new_list_name and new_list_name not in st.session_state.watchlists:
+            st.session_state.watchlists[new_list_name] = []
+            st.session_state.active_list = new_list_name
+            st.rerun()
+
+# --- 4. Main Dashboard ---
+st.title(f"📱 Pocket Analyst: {st.session_state.active_list}")
+
+if not current_tickers:
+    st.warning("This watchlist is empty! Add stocks from the sidebar.")
+    st.stop()
+
+# TABS for different views
+tab1, tab2, tab3, tab4 = st.tabs(["📊 Analysis Board", "🔗 Correlation & Risk", "💎 Valuation (DCF)", "🔙 Backtest"])
+
+# --- TAB 1: MAIN ANALYSIS (The "Master" View) ---
+with tab1:
+    # Run your custom analysis logic
+    results = []
+    # We use a spinner so the user knows it's working
+    with st.spinner("Crunching the numbers..."):
+        for ticker in current_tickers:
+            data = analyze_stock(ticker)
+            if data:
+                results.append(data)
+    
     if results:
         df = pd.DataFrame(results)
         df = df.sort_values(by="Score", ascending=False)
         
-        # Clean up price formatting for the table
-        df['Display Price'] = df['Price'].apply(lambda x: f"${x:.2f}")
+        # Display Table with Selection Enabled
+        st.info("👇 Click a row below to see the Deep Dive Charts")
         
-        # Display Table
-        st.dataframe(
+        selection = st.dataframe(
             df,
-            column_order=("Ticker", "Verdict", "Score", "Trend", "Display Price", "Key Strengths"),
+            column_order=("Ticker", "Verdict", "Score", "Trend", "Price", "Upside %", "Key Strengths"),
             hide_index=True,
-            use_container_width=True
+            use_container_width=True,
+            on_select="rerun",  # Triggers the drill-down
+            selection_mode="single-row"
         )
-
-        # --- NEW: Top Pick Deep Dive (Professional Charts) ---
-        st.markdown("---")
         
-        top_stock = df.iloc[0]
-        top_ticker = top_stock['Ticker']
-        
-        st.subheader(f"🏆 Deep Dive: {top_ticker}")
-        
-        col1, col2 = st.columns([2, 1])
-        
-        with col1:
-            # RENDER THE NEW CHART HERE
-            st.write("**Technical Analysis (6 Months)**")
-            fig = create_chart(top_ticker)
-            st.plotly_chart(fig, use_container_width=True)
+        # --- THE "DEEP DIVE" SECTION (Drill Down) ---
+        if selection.selection.rows:
+            selected_index = selection.selection.rows[0]
+            # Match the selected row to the DataFrame
+            selected_row = df.iloc[selected_index]
+            selected_ticker = selected_row['Ticker']
             
-        with col2:
-            st.write("**Wall St. Analyst Targets**")
+            st.divider()
+            st.subheader(f"🏆 Deep Dive: {selected_ticker}")
             
-            target = top_stock['Target Price']
-            upside = top_stock['Upside %']
-            price = top_stock['Price']
+            # Use YOUR existing chart function
+            col1, col2 = st.columns([2, 1])
             
-            if target and target > 0:
-                st.metric(
-                    label="Average Price Target",
-                    value=f"${target:.2f}",
-                    delta=f"{upside:.2f}% Upside"
-                )
-                st.write(f"Analysts think {top_ticker} is worth **${target:.2f}**.")
-            else:
-                st.warning("No analyst targets available.")
+            with col1:
+                st.write("**Technical Analysis (6 Months)**")
+                fig = create_chart(selected_ticker)
+                st.plotly_chart(fig, use_container_width=True)
                 
+            with col2:
+                st.write("**Wall St. Analyst Targets**")
+                target = selected_row['Target Price']
+                upside = selected_row['Upside %']
+                
+                if target and target > 0:
+                    st.metric(label="Analyst Price Target", value=f"${target:.2f}", delta=f"{upside:.2f}% Upside")
+                    st.write(f"Consensus: Is {selected_ticker} worth **${target:.2f}**?")
+                else:
+                    st.warning("No analyst targets available.")
+                
+                st.write("---")
+                st.write("**Pocket Analyst Verdict**")
+                st.metric(label="Score", value=selected_row["Score"], delta=selected_row["Verdict"])
+                st.write(f"**Strengths:** {selected_row['Key Strengths']}")
+
+# --- TAB 2: RISK & CORRELATION ---
+with tab2:
+    st.subheader("⚠️ Risk & Correlation Matrix")
+    st.write("Do your stocks move together? (Dark Red = High Correlation/Risk)")
+    
+    if len(current_tickers) > 1:
+        # Fetch simple closing data for correlation
+        data_hist = yf.download(current_tickers, period="1y", progress=False)['Close']
+        corr_matrix = data_hist.corr()
+        
+        fig_corr = px.imshow(
+            corr_matrix, 
+            text_auto=True, 
+            aspect="auto",
+            color_continuous_scale='RdBu_r',
+            origin='lower'
+        )
+        st.plotly_chart(fig_corr, use_container_width=True)
     else:
-        st.warning("No data found.")
-else:
-    st.info("Click 'Analyze Watchlist Now' to start.")
+        st.info("Add at least 2 stocks to see correlation.")
+
+# --- TAB 3: DCF VALUATION ---
+with tab3:
+    st.subheader("💰 Automated Discounted Cash Flow (DCF)")
+    st.write("Intrinsic Value estimate based on Free Cash Flow.")
+    
+    col_dcf1, col_dcf2 = st.columns(2)
+    with col_dcf1:
+        growth_input = st.slider("Assumed Growth Rate", 0.01, 0.20, 0.05)
+    with col_dcf2:
+        discount_input = st.slider("Discount Rate (Risk)", 0.05, 0.15, 0.09)
+    
+    dcf_results = []
+    for ticker in current_tickers:
+        # Fetch current price again for accuracy or reuse from tab1
+        stock_price = df[df['Ticker'] == ticker]['Price'].values[0] if results else 0
+        fair_value = calculate_dcf(ticker, growth_rate=growth_input, discount_rate=discount_input)
+        
+        status = "N/A"
+        if fair_value:
+            dcf_upside = ((fair_value - stock_price) / stock_price) * 100
+            status = "Undervalued 🟢" if fair_value > stock_price else "Overvalued 🔴"
+            
+            dcf_results.append({
+                "Ticker": ticker,
+                "Current Price": f"${stock_price:.2f}",
+                "Est. Fair Value": f"${fair_value:.2f}",
+                "DCF Upside": f"{dcf_upside:.1f}%",
+                "Verdict": status
+            })
+    
+    if dcf_results:
+        st.dataframe(pd.DataFrame(dcf_results))
+
+# --- TAB 4: BACKTEST ---
+with tab4:
+    st.subheader("📜 1-Year Backtest")
+    st.write("Hypothetical Return if you invested $10,000 evenly 1 year ago.")
+    
+    if len(current_tickers) > 0:
+        data_backtest = yf.download(current_tickers, period="1y", progress=False)['Close']
+        
+        bt_results = []
+        total_start = 0
+        total_end = 0
+        investment_per_stock = 10000 / len(current_tickers)
+        
+        for ticker in current_tickers:
+            # Handle single vs multi-index series
+            prices = data_backtest[ticker] if len(current_tickers) > 1 else data_backtest
+            
+            # Simple check for empty data
+            if prices.empty: continue
+
+            start_price = prices.iloc[0]
+            end_price = prices.iloc[-1]
+            shares = investment_per_stock / start_price
+            end_value = shares * end_price
+            
+            total_start += investment_per_stock
+            total_end += end_value
+            
+            roi = ((end_value - investment_per_stock) / investment_per_stock) * 100
+            
+            bt_results.append({
+                "Ticker": ticker,
+                "Start Price": f"${start_price:.2f}",
+                "End Price": f"${end_price:.2f}",
+                "Return (%)": f"{roi:.1f}%"
+            })
+            
+        st.dataframe(pd.DataFrame(bt_results))
+        
+        total_roi = ((total_end - total_start) / total_start) * 100
+        st.metric(label="Total Portfolio Return", value=f"${total_end:,.2f}", delta=f"{total_roi:.1f}%")
