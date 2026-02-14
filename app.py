@@ -284,6 +284,17 @@ with tab2: # Risk Tab
     st.subheader("⚠️ Sector Power Rankings")
     if results:
         sector_df = pd.DataFrame(results).groupby("Sector")['Score'].mean().reset_index().sort_values("Score", ascending=False)
+        
+        # This is the part that was breaking
         fig_sec = px.bar(
-            sector_df, x="Score", y="Sector", orientation='h', color="Score", 
-            color_continuous_scale=["red", "yellow", "green"], range_color=[0, 100], text_auto
+            sector_df, 
+            x="Score", 
+            y="Sector", 
+            orientation='h', 
+            color="Score", 
+            color_continuous_scale=["red", "yellow", "green"], 
+            range_color=[0, 100], 
+            text_auto=True
+        )
+        
+        st.plotly_chart(fig_sec, use_container_width=True)
