@@ -5,6 +5,7 @@ import plotly.graph_objects as go
 import plotly.express as px
 from plotly.subplots import make_subplots
 import numpy as np
+from textblob import TextBlob
 
 # --- Page Configuration ---
 st.set_page_config(page_title="Philip's Pocket Analyst Pro", layout="wide")
@@ -19,7 +20,6 @@ if 'watchlists' not in st.session_state:
 if 'active_list' not in st.session_state:
     st.session_state.active_list = 'Default'
 
-# Ensure selected_ticker always exists
 if 'selected_ticker' not in st.session_state:
     st.session_state.selected_ticker = None 
 
@@ -34,22 +34,25 @@ SECTOR_MAP = {
 # --- 3. Helper Functions ---
 def create_chart(ticker):
     """Generates a professional Candlestick + Volume chart."""
-    df = yf.Ticker(ticker).history(period="6mo")
-    if df.empty: return go.Figure()
-    
-    fig = make_subplots(
-        rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.05, 
-        subplot_titles=(f"{ticker} Price Action", "Volume"), row_heights=[0.7, 0.3] 
-    )
-    fig.add_trace(go.Candlestick(
-        x=df.index, open=df['Open'], high=df['High'],
-        low=df['Low'], close=df['Close'], name="Price"
-    ), row=1, col=1)
-    fig.add_trace(go.Bar(
-        x=df.index, y=df['Volume'], name="Volume", marker_color='rgba(100, 100, 255, 0.5)'
-    ), row=2, col=1)
-    fig.update_layout(height=500, xaxis_rangeslider_visible=False, showlegend=False)
-    return fig
+    try:
+        df = yf.Ticker(ticker).history(period="6mo")
+        if df.empty: return go.Figure()
+        
+        fig = make_subplots(
+            rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.05, 
+            subplot_titles=(f"{ticker} Price Action", "Volume"), row_heights=[0.7, 0.3] 
+        )
+        fig.add_trace(go.Candlestick(
+            x=df.index, open=df['Open'], high=df['High'],
+            low=df['Low'], close=df['Close'], name="Price"
+        ), row=1, col=1)
+        fig.add_trace(go.Bar(
+            x=df.index, y=df['Volume'], name="Volume", marker_color='rgba(100, 100, 255, 0.5)'
+        ), row=2, col=1)
+        fig.update_layout(height=500, xaxis_rangeslider_visible=False, showlegend=False)
+        return fig
+    except:
+        return go.Figure()
 
 def get_sector_performance(sector, period="3mo"):
     etf = SECTOR_MAP.get(sector, 'SPY')
@@ -62,6 +65,37 @@ def get_sector_performance(sector, period="3mo"):
     except:
         return 0, 'SPY'
     return 0, 'SPY'
+
+def get_news_sentiment(ticker):
+    """Fetches news and formats them as clickable links."""
+    try:
+        stock = yf.Ticker(ticker)
+        news = stock.news
+        
+        if not news: return 0, []
+        
+        sentiment_score = 0
+        headlines = []
+        count = 0
+        
+        for item in news[:5]: 
+            title = item.get('title', '')
+            link = item.get('link', '#') # Grab the URL
+            
+            if title:
+                blob = TextBlob(title)
+                score = blob.sentiment.polarity
+                sentiment_score += score
+                headlines.append({"title": title, "score": score, "link": link})
+                count += 1
+                
+        if count > 0:
+            avg_score = sentiment_score / count
+            return avg_score, headlines
+        else:
+            return 0, []
+    except:
+        return 0, []
 
 def analyze_stock(ticker):
     """Buy/Sell/Hold Logic + Sector Comparison."""
@@ -124,7 +158,6 @@ def get_valuation_models(ticker):
     try:
         stock = yf.Ticker(ticker)
         info = stock.info
-        
         price = info.get('currentPrice', 0)
         eps = info.get('trailingEps', 0)
         book_value = info.get('bookValue', 0)
@@ -132,25 +165,17 @@ def get_valuation_models(ticker):
         if growth_est is None: growth_est = 0.05 
         
         models = {}
-        
-        # 1. Graham Number
         if eps and eps > 0 and book_value and book_value > 0:
-            graham_val = np.sqrt(22.5 * eps * book_value)
-            models['Graham Number'] = graham_val
-        else:
-            models['Graham Number'] = None
+            models['Graham Number'] = np.sqrt(22.5 * eps * book_value)
+        else: models['Graham Number'] = None
             
-        # 2. Peter Lynch
         growth_rate_whole = min(growth_est * 100, 25) 
         if eps and eps > 0 and growth_rate_whole > 0:
-            lynch_val = eps * growth_rate_whole
-            models['Peter Lynch Value'] = lynch_val
-        else:
-            models['Peter Lynch Value'] = None
+            models['Peter Lynch Value'] = eps * growth_rate_whole
+        else: models['Peter Lynch Value'] = None
             
         return models, price, growth_est
-    except:
-        return {}, 0, 0.05
+    except: return {}, 0, 0.05
 
 def calculate_dcf(ticker, growth_rate, discount_rate=0.10, years=5):
     """Standard DCF Calculation."""
@@ -160,12 +185,10 @@ def calculate_dcf(ticker, growth_rate, discount_rate=0.10, years=5):
         fcf = info.get('freeCashFlow', info.get('operatingCashflows', None))
         shares = info.get('sharesOutstanding', 1)
         if fcf is None or shares is None: return None
-
         future_fcf = []
         for i in range(1, years + 1):
             fcf = fcf * (1 + growth_rate)
             future_fcf.append(fcf / ((1 + discount_rate) ** i))
-            
         terminal_value = (fcf * (1 + 0.02)) / (discount_rate - 0.02)
         pv_terminal = terminal_value / ((1 + discount_rate) ** years)
         return (sum(future_fcf) + pv_terminal) / shares
@@ -177,143 +200,4 @@ with st.sidebar:
     watchlist_names = list(st.session_state.watchlists.keys())
     selected_list_name = st.selectbox("Select Watchlist", watchlist_names, index=watchlist_names.index(st.session_state.active_list))
     st.session_state.active_list = selected_list_name
-    current_tickers = st.session_state.watchlists[st.session_state.active_list]
-    st.code(", ".join(current_tickers))
-    st.divider()
-    new_ticker = st.text_input("Add Ticker").upper()
-    if st.button("Add Stock"):
-        if new_ticker and new_ticker not in current_tickers:
-            st.session_state.watchlists[st.session_state.active_list].append(new_ticker)
-            st.rerun()
-
-# --- 5. Main Dashboard ---
-st.title(f"📱 Pocket Analyst: {st.session_state.active_list}")
-
-if not current_tickers:
-    st.warning("Empty Watchlist!")
-    st.stop()
-
-tab1, tab2, tab3, tab4 = st.tabs(["📊 Analysis", "🔗 Risk & Sectors", "💎 Valuation Models", "🔙 Backtest"])
-
-with tab1:
-    results = []
-    with st.spinner("Analyzing..."):
-        for ticker in current_tickers:
-            data = analyze_stock(ticker)
-            if data: results.append(data)
-    
-    if results:
-        df = pd.DataFrame(results)
-        df = df.sort_values(by="Score", ascending=False)
-        st.info("👇 Select a stock to view details (Selection syncs to Valuation Tab)")
-        
-        selection = st.dataframe(
-            df,
-            column_order=("Ticker", "Verdict", "Score", "Trend", "Price", "Sector", "Upside %"),
-            hide_index=True,
-            use_container_width=True,
-            on_select="rerun",
-            selection_mode="single-row"
-        )
-        
-        # --- ROBUST SELECTION LOGIC ---
-        # 1. Default to first ticker if nothing selected
-        if st.session_state.selected_ticker is None and not df.empty:
-            st.session_state.selected_ticker = df.iloc[0]['Ticker']
-
-        # 2. Update if user clicked a row
-        if selection.selection.rows:
-            idx = selection.selection.rows[0]
-            selected_row = df.iloc[idx]
-            st.session_state.selected_ticker = selected_row['Ticker']
-            
-        # 3. Retrieve Data for Display
-        if st.session_state.selected_ticker in df['Ticker'].values:
-            display_row = df[df['Ticker'] == st.session_state.selected_ticker].iloc[0]
-            
-            ticker = display_row['Ticker']
-            sector = display_row['Sector']
-            etf = display_row['Sector ETF']
-            st.divider()
-            st.subheader(f"🏆 Deep Dive: {ticker} vs. {sector} ({etf})")
-            c1, c2 = st.columns([2, 1])
-            with c1: st.plotly_chart(create_chart(ticker), use_container_width=True)
-            with c2:
-                s_ret, e_ret, alpha = display_row['Stock Return'], display_row['Sector Return'], display_row['Alpha']
-                st.metric(f"{ticker} Return", f"{s_ret:.1f}%"); st.metric(f"{etf} Return", f"{e_ret:.1f}%")
-                if alpha > 0: st.success(f"🚀 Beating {etf} by {alpha:.1f}%")
-                else: st.error(f"🐢 Lagging {etf} by {abs(alpha):.1f}%")
-
-with tab2: # Risk Tab
-    st.subheader("⚠️ Sector Power Rankings")
-    if results:
-        sector_df = pd.DataFrame(results).groupby("Sector")['Score'].mean().reset_index().sort_values("Score", ascending=False)
-        fig_sec = px.bar(
-            sector_df, x="Score", y="Sector", orientation='h', color="Score", 
-            color_continuous_scale=["red", "yellow", "green"], range_color=[0, 100], text_auto=True
-        )
-        st.plotly_chart(fig_sec, use_container_width=True)
-
-with tab3: # VALUATION TAB (Fixed)
-    val_ticker = st.session_state.selected_ticker
-    
-    # Fallback if state is missing
-    if not val_ticker and current_tickers:
-        val_ticker = current_tickers[0]
-
-    st.subheader(f"💎 Triangulated Valuation: {val_ticker}")
-    st.caption("Auto-selected from Analysis Tab")
-
-    if val_ticker:
-        models, price, implied_growth = get_valuation_models(val_ticker)
-        
-        col_v1, col_v2, col_v3 = st.columns(3)
-        
-        with col_v1:
-            st.markdown("##### 1. Graham Number")
-            st.caption("Best for Stable/Value Stocks")
-            g_val = models.get('Graham Number')
-            if g_val:
-                delta = ((g_val - price) / price) * 100
-                st.metric("Conservative Value", f"${g_val:.2f}", f"{delta:.1f}%")
-            else:
-                st.warning("N/A (Negative Earnings/Book)")
-                
-        with col_v2:
-            st.markdown("##### 2. Peter Lynch Value")
-            st.caption("Best for Growth Stocks")
-            l_val = models.get('Peter Lynch Value')
-            if l_val:
-                delta = ((l_val - price) / price) * 100
-                st.metric("Fair Growth Value", f"${l_val:.2f}", f"{delta:.1f}%")
-            else:
-                st.warning("N/A (No Growth Data)")
-
-        with col_v3:
-            st.markdown("##### 3. DCF (Cash Flow)")
-            st.caption("Intrinsic Value")
-            dcf_growth = st.slider(f"Expected Growth", 0.0, 0.25, float(implied_growth), 0.01)
-            dcf_val = calculate_dcf(val_ticker, dcf_growth)
-            if dcf_val:
-                delta = ((dcf_val - price) / price) * 100
-                st.metric("DCF Value", f"${dcf_val:.2f}", f"{delta:.1f}%")
-            else:
-                st.warning("N/A (No Cash Flow)")
-
-with tab4: # BACKTEST TAB (Fixed)
-    st.subheader("📜 1-Year Backtest")
-    if current_tickers:
-        try:
-            # Download data
-            data = yf.download(current_tickers, period="1y", progress=False)
-            
-            # Robust Check: Did we get 'Close' data?
-            if 'Close' in data.columns:
-                close_data = data['Close']
-                st.line_chart(close_data)
-            else:
-                # Fallback for single ticker or flat structure
-                st.line_chart(data)
-                
-        except Exception as e:
-            st.error(f"Could not load backtest data: {e}")
+    current_tickers
