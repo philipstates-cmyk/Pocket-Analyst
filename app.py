@@ -212,7 +212,7 @@ def get_valuation_models(ticker):
             
         growth_rate_whole = min((growth_est or 0.05) * 100, 25) 
         if eps and eps > 0 and growth_rate_whole > 0:
-            models['Peter Lynch Value'] = eps * growth_rate_whole
+models['Peter Lynch Value'] = eps * growth_rate_whole
         else: models['Peter Lynch Value'] = None
             
         return models, price, growth_est, target_mean, target_low, target_high, num_analysts
@@ -304,6 +304,7 @@ with tab1:
                 alpha = display_row['Alpha']
                 if alpha > 0: st.success(f"🚀 Beating Sector by {alpha:.1f}%")
                 else: st.error(f"🐢 Lagging Sector by {abs(alpha):.1f}%")
+
 with tab2: # RISK DASHBOARD
     val_ticker = st.session_state.selected_ticker
     if not val_ticker and current_tickers: val_ticker = current_tickers[0]
@@ -379,52 +380,47 @@ with tab3: # VALUATION TAB
             else: st.warning("N/A (No Growth)")
             st.caption("Best for: Fast growers (Tech, Consumer Discretionary).")
 
-with tab4: # BACKTEST TAB (THE GROWTH OF $10K)
-    st.subheader("📜 Backtest: Growth of $10,000 (1 Year)")
+with tab4: # BACKTEST TAB (SELECTED STOCK vs SPY)
+    val_ticker = st.session_state.selected_ticker
+    if not val_ticker and current_tickers: val_ticker = current_tickers[0]
     
-    if current_tickers:
-        with st.spinner("Simulating Portfolio Performance..."):
+    st.subheader(f"📜 Backtest: {val_ticker} vs. S&P 500 (1 Year)")
+    
+    if val_ticker:
+        with st.spinner("Simulating the Fight..."):
             try:
-                # 1. Download Data (Portfolio + Benchmark)
-                tickers_to_download = current_tickers + ['SPY']
+                # 1. Download Data for just the 2 fighters
+                tickers_to_download = [val_ticker, 'SPY']
                 data = yf.download(tickers_to_download, period="1y", progress=False)['Close']
                 
-                if not data.empty:
+                if not data.empty and val_ticker in data.columns:
                     # 2. Normalize to $10,000 Start
-                    # (Current Price / Start Price) * 10,000
                     normalized_data = (data / data.iloc[0]) * 10000
                     
-                    # 3. Calculate "My Portfolio" (Equal Weight Average)
-                    # We average the growth of all stocks in the active list (excluding SPY)
-                    portfolio_stocks = normalized_data[current_tickers]
-                    normalized_data['My Portfolio'] = portfolio_stocks.mean(axis=1)
-                    
-                    # 4. Plot Comparison (Portfolio vs SPY)
+                    # 3. Plot Comparison
                     fig_bt = px.line(
                         normalized_data, 
-                        y=['My Portfolio', 'SPY'],
-                        labels={"value": "Portfolio Value ($)", "variable": "Strategy"},
-                        color_discrete_map={"My Portfolio": "#00CC96", "SPY": "#EF553B"}
+                        y=[val_ticker, 'SPY'],
+                        labels={"value": "Investment Value ($)", "variable": "Ticker"},
+                        color_discrete_map={val_ticker: "#00CC96", "SPY": "#EF553B"}
                     )
                     
-                    # Add 'Break Even' line
                     fig_bt.add_hline(y=10000, line_dash="dot", line_color="white", opacity=0.5)
-                    
                     st.plotly_chart(fig_bt, width='stretch')
                     
-                    # 5. Final Stats
-                    end_val = normalized_data['My Portfolio'].iloc[-1]
-                    spy_val = normalized_data['SPY'].iloc[-1]
+                    # 4. Final Stats
+                    stock_end = normalized_data[val_ticker].iloc[-1]
+                    spy_end = normalized_data['SPY'].iloc[-1]
                     
                     c1, c2 = st.columns(2)
-                    c1.metric("My Portfolio Value", f"${end_val:,.0f}", f"{((end_val-10000)/10000)*100:.1f}% Return")
-                    c2.metric("S&P 500 Value", f"${spy_val:,.0f}", f"{((spy_val-10000)/10000)*100:.1f}% Return")
+                    c1.metric(f"{val_ticker} Final Value", f"${stock_end:,.0f}", f"{((stock_end-10000)/10000)*100:.1f}% Return")
+                    c2.metric("S&P 500 Final Value", f"${spy_end:,.0f}", f"{((spy_end-10000)/10000)*100:.1f}% Return")
                     
-                    if end_val > spy_val:
-                        st.success(f"🚀 You beat the market by ${end_val - spy_val:,.0f}!")
+                    if stock_end > spy_end:
+                        st.success(f"🚀 {val_ticker} beat the market by ${stock_end - spy_end:,.0f}!")
                     else:
-                        st.error(f"🐢 You trailed the market by ${spy_val - end_val:,.0f}.")
+                        st.error(f"🐢 {val_ticker} trailed the market by ${spy_end - stock_end:,.0f}.")
                 else:
-                    st.warning("No data available for backtest.")
+                    st.warning(f"Could not retrieve backtest data for {val_ticker}.")
             except Exception as e:
                 st.error(f"Backtest Error: {e}")
