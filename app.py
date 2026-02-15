@@ -171,6 +171,16 @@ def analyze_stock(ticker):
         if alpha > 5: score += 10; reasons.append(f"🚀 Crushing {sector_etf}")
         elif alpha < -5: score -= 5; reasons.append(f"🐢 Lagging {sector_etf}")
 
+        # --- BUILD KEY INDICATORS ---
+        # 1. Trend
+        trend_icon = "📈" if current_price > sma_50 else "📉"
+        # 2. Valuation
+        val_icon = "🏷️" if pe_ratio < 25 else "⚡"
+        # 3. Alpha (Performance vs Sector)
+        alpha_icon = "🏆" if alpha > 0 else "🐢"
+        
+        key_indicators = f"{trend_icon} {val_icon} {alpha_icon}"
+
         if score >= 80: verdict = "STRONG BUY"
         elif score >= 60: verdict = "BUY"
         elif score >= 40: verdict = "HOLD"
@@ -181,13 +191,23 @@ def analyze_stock(ticker):
             upside = ((target_price - current_price) / current_price) * 100
             
         return {
-            "Ticker": ticker.upper(), "Price": current_price, "Score": score,
-            "Verdict": verdict, "Trend": trend_status, "Sector": sector,
-            "Sector ETF": sector_etf, "Stock Return": stock_return,
-            "Sector Return": sector_return, "Alpha": alpha,
-            "Target Price": target_price, "Upside %": upside,
+            "Ticker": ticker.upper(), 
+            "Price": current_price, 
+            "Score": score,
+            "Verdict": verdict, 
+            "Key Indicators": key_indicators, # NEW COLUMN
+            "Trend": trend_status, 
+            "Sector": sector,
+            "Sector ETF": sector_etf, 
+            "Stock Return": stock_return,
+            "Sector Return": sector_return, 
+            "Alpha": alpha,
+            "Target Price": target_price, 
+            "Upside %": upside,
             "Key Strengths": ", ".join(reasons),
-            "Volatility": volatility, "Max Drawdown": drawdown, "Sharpe Ratio": sharpe
+            "Volatility": volatility, 
+            "Max Drawdown": drawdown, 
+            "Sharpe Ratio": sharpe
         }
     except Exception: return None
 
@@ -206,22 +226,17 @@ def get_valuation_models(ticker):
         num_analysts = info.get('numberOfAnalystOpinions')
         
         models = {}
-        # Graham Number
         if eps and eps > 0 and book_value and book_value > 0:
             models['Graham Number'] = np.sqrt(22.5 * eps * book_value)
-        else: 
-            models['Graham Number'] = None
+        else: models['Graham Number'] = None
             
-        # Peter Lynch Value (The Fixed Part)
         growth_rate_whole = min((growth_est or 0.05) * 100, 25) 
         if eps and eps > 0 and growth_rate_whole > 0:
             models['Peter Lynch Value'] = eps * growth_rate_whole
-        else: 
-            models['Peter Lynch Value'] = None
+        else: models['Peter Lynch Value'] = None
             
         return models, price, growth_est, target_mean, target_low, target_high, num_analysts
-    except: 
-        return {}, 0, 0.05, None, None, None, None
+    except: return {}, 0, 0.05, None, None, None, None
 
 # --- 4. Sidebar ---
 with st.sidebar:
@@ -260,9 +275,11 @@ with tab1:
         df = df.sort_values(by="Score", ascending=False)
         st.info("👇 Select a stock to view details (Selection syncs to Valuation Tab)")
         
+        # --- UPDATE TABLE COLUMNS ---
         selection = st.dataframe(
             df,
-            column_order=("Ticker", "Verdict", "Score", "Trend", "Price", "Sector", "Upside %"),
+            # Added "Key Indicators" to the view
+            column_order=("Ticker", "Verdict", "Key Indicators", "Score", "Price", "Sector", "Upside %"),
             hide_index=True,
             width='stretch',
             on_select="rerun",
@@ -305,7 +322,14 @@ with tab1:
                         st.markdown(f"[{icon} {h['title']}]({h['link']})")
                 else:
                     st.info("No recent news found.")
+                
                 st.write("---")
+                # Legend for Key Indicators
+                with st.expander("ℹ️ Key Indicators Legend"):
+                    st.write("📈/📉: Price Trend (vs 50-Day Moving Average)")
+                    st.write("🏷️/⚡: Valuation (Cheap vs Premium P/E)")
+                    st.write("🏆/🐢: Performance (Beating vs Lagging Sector)")
+                
                 alpha = display_row['Alpha']
                 if alpha > 0: st.success(f"🚀 Beating Sector by {alpha:.1f}%")
                 else: st.error(f"🐢 Lagging Sector by {abs(alpha):.1f}%")
@@ -394,20 +418,15 @@ with tab4: # BACKTEST TAB (SELECTED STOCK vs SPY)
     if val_ticker:
         with st.spinner("Simulating the Fight..."):
             try:
-                # 1. Download Data for just the 2 fighters
                 tickers_to_download = [val_ticker, 'SPY']
                 data = yf.download(tickers_to_download, period="1y", progress=False)['Close']
                 
-                # Check if data download was successful and has correct columns
                 if not data.empty and val_ticker in data.columns and 'SPY' in data.columns:
-                    # 2. Normalize to $10,000 Start
-                    # We select just the two columns we need to avoid any multi-index confusion
                     fight_data = data[[val_ticker, 'SPY']].dropna()
                     
                     if not fight_data.empty:
                         normalized_data = (fight_data / fight_data.iloc[0]) * 10000
                         
-                        # 3. Plot Comparison
                         fig_bt = px.line(
                             normalized_data, 
                             y=[val_ticker, 'SPY'],
@@ -418,7 +437,6 @@ with tab4: # BACKTEST TAB (SELECTED STOCK vs SPY)
                         fig_bt.add_hline(y=10000, line_dash="dot", line_color="white", opacity=0.5)
                         st.plotly_chart(fig_bt, width='stretch')
                         
-                        # 4. Final Stats
                         stock_end = normalized_data[val_ticker].iloc[-1]
                         spy_end = normalized_data['SPY'].iloc[-1]
                         
