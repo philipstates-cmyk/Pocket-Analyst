@@ -80,11 +80,9 @@ def get_google_news(ticker):
             title = item.find('title').text
             link = item.find('link').text
             title = title.split(' - ')[0]
-            
             blob = TextBlob(title)
             score = blob.sentiment.polarity
             headlines.append({"title": title, "score": score, "link": link})
-            
         return headlines
     except:
         return []
@@ -94,7 +92,6 @@ def get_news_sentiment(ticker):
     sentiment_score = 0
     headlines = []
     
-    # 1. Try Yahoo Finance
     try:
         stock = yf.Ticker(ticker)
         news = stock.news
@@ -109,17 +106,52 @@ def get_news_sentiment(ticker):
     except:
         pass 
 
-    # 2. Fallback to Google News
     if not headlines:
         headlines = get_google_news(ticker)
     
-    # 3. Calculate Average
     if headlines:
         total_score = sum(h['score'] for h in headlines)
         avg_score = total_score / len(headlines)
         return avg_score, headlines
     
     return 0, []
+
+def calculate_risk_metrics(ticker):
+    """Calculates Max Drawdown, Volatility, and Sharpe Ratio."""
+    try:
+        stock = yf.Ticker(ticker)
+        # Get 1 year of data
+        hist = stock.history(period="1y")
+        if hist.empty: return None
+
+        # Daily Returns
+        hist['Returns'] = hist['Close'].pct_change()
+        
+        # 1. Annualized Volatility (Risk)
+        volatility = hist['Returns'].std() * np.sqrt(252) * 100
+        
+        # 2. Max Drawdown (Worst drop from peak)
+        hist['Cumulative'] = (1 + hist['Returns']).cumprod()
+        hist['Peak'] = hist['Cumulative'].cummax()
+        hist['Drawdown'] = (hist['Cumulative'] - hist['Peak']) / hist['Peak']
+        max_drawdown = hist['Drawdown'].min() * 100
+        
+        # 3. Sharpe Ratio (Return / Risk)
+        # Assuming Risk Free Rate = 4% (0.04)
+        mean_return = hist['Returns'].mean() * 252
+        risk_free_rate = 0.04
+        if hist['Returns'].std() > 0:
+            sharpe_ratio = (mean_return - risk_free_rate) / (hist['Returns'].std() * np.sqrt(252))
+        else:
+            sharpe_ratio = 0
+        
+        return {
+            "Volatility": volatility,
+            "Max Drawdown": max_drawdown,
+            "Sharpe Ratio": sharpe_ratio
+        }
+    except:
+        return None
 
 def analyze_stock(ticker):
     """Buy/Sell/Hold Logic + Sector Comparison."""
@@ -144,6 +176,12 @@ def analyze_stock(ticker):
         sector_return, sector_etf = get_sector_performance(sector)
         alpha = stock_return - sector_return 
         
+        # Calculate Risk Metrics (NEW)
+        risk_data = calculate_risk_metrics(ticker)
+        volatility = risk_data['Volatility'] if risk_data else 0
+        drawdown = risk_data['Max Drawdown'] if risk_data else 0
+        sharpe = risk_data['Sharpe Ratio'] if risk_data else 0
+
         score = 0
         reasons = []
         
@@ -173,7 +211,10 @@ def analyze_stock(ticker):
             "Sector ETF": sector_etf, "Stock Return": stock_return,
             "Sector Return": sector_return, "Alpha": alpha,
             "Target Price": target_price, "Upside %": upside,
-            "Key Strengths": ", ".join(reasons)
+            "Key Strengths": ", ".join(reasons),
+            "Volatility": volatility,
+            "Max Drawdown": drawdown,
+            "Sharpe Ratio": sharpe
         }
     except Exception: return None
 
@@ -241,7 +282,7 @@ if not current_tickers:
     st.warning("Empty Watchlist!")
     st.stop()
 
-tab1, tab2, tab3, tab4 = st.tabs(["📊 Analysis", "🔗 Risk & Sectors", "💎 Valuation Models", "🔙 Backtest"])
+tab1, tab2, tab3, tab4 = st.tabs(["📊 Analysis", "⚠️ Risk & Sectors", "💎 Valuation Models", "🔙 Backtest"])
 
 with tab1:
     results = []
@@ -307,17 +348,61 @@ with tab1:
                 if alpha > 0: st.success(f"🚀 Beating Sector by {alpha:.1f}%")
                 else: st.error(f"🐢 Lagging Sector by {abs(alpha):.1f}%")
 
-with tab2: # Risk Tab
-    st.subheader("⚠️ Sector Power Rankings")
+with tab2: # NEW: RISK & SECTOR DASHBOARD
+    # 1. Get Selected Ticker from Session State
+    val_ticker = st.session_state.selected_ticker
+    if not val_ticker and current_tickers: val_ticker = current_tickers[0]
+    
+    st.subheader(f"⚠️ Risk Profile: {val_ticker}")
+    
+    # 2. Find data for the selected ticker
     if results:
-        sector_df = pd.DataFrame(results).groupby("Sector")['Score'].mean().reset_index().sort_values("Score", ascending=False)
-        fig_sec = px.bar(
-            sector_df, x="Score", y="Sector", orientation='h', color="Score", 
-            color_continuous_scale=["red", "yellow", "green"], range_color=[0, 100], text_auto=True
+        selected_risk_data = next((item for item in results if item["Ticker"] == val_ticker), None)
+        
+        if selected_risk_data:
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                st.metric("Volatility (Risk)", f"{selected_risk_data['Volatility']:.1f}%")
+            with c2:
+                st.metric("Max Drawdown", f"{selected_risk_data['Max Drawdown']:.1f}%")
+            with c3:
+                sharpe = selected_risk_data['Sharpe Ratio']
+                color = "normal"
+                if sharpe > 1: color = "normal" 
+                st.metric("Sharpe Ratio", f"{sharpe:.2f}")
+                
+            if selected_risk_data['Sharpe Ratio'] < 1:
+                st.warning("⚠️ Low Sharpe Ratio: You are taking high risk for low return.")
+            else:
+                st.success("✅ Good Risk/Reward Balance.")
+        
+    st.divider()
+    st.subheader("🏭 Portfolio Heatmap")
+    
+    if results:
+        # Generate Treemap
+        fig_tree = px.treemap(
+            df, 
+            path=[px.Constant("Portfolio"), 'Sector', 'Ticker'], 
+            values='Score',
+            color='Score',
+            color_continuous_scale='RdYlGn',
+            color_continuous_midpoint=50
         )
-        st.plotly_chart(fig_sec, width='stretch')
+        st.plotly_chart(fig_tree, width='stretch')
 
-with tab3: # VALUATION TAB (Fixed Printing Issue)
+        st.caption("Full Risk Table:")
+        # Create Risk DataFrame
+        risk_df = df[['Ticker', 'Volatility', 'Max Drawdown', 'Sharpe Ratio']].copy()
+        
+        # Format the columns for display
+        risk_df['Volatility'] = risk_df['Volatility'].apply(lambda x: f"{x:.1f}%")
+        risk_df['Max Drawdown'] = risk_df['Max Drawdown'].apply(lambda x: f"{x:.1f}%")
+        risk_df['Sharpe Ratio'] = risk_df['Sharpe Ratio'].apply(lambda x: f"{x:.2f}")
+        
+        st.dataframe(risk_df, hide_index=True, width='stretch')
+
+with tab3: # VALUATION TAB
     val_ticker = st.session_state.selected_ticker
     if not val_ticker and current_tickers: val_ticker = current_tickers[0]
 
@@ -326,31 +411,24 @@ with tab3: # VALUATION TAB (Fixed Printing Issue)
         models, price, implied_growth = get_valuation_models(val_ticker)
         c1, c2, c3 = st.columns(3)
         
-        # FIX: Replaced one-liners with proper if/else blocks to prevent printing
         with c1:
             st.markdown("##### 1. Graham Number"); st.caption("Conservative")
             g = models.get('Graham Number')
-            if g:
-                st.metric("Value", f"${g:.2f}", f"{((g-price)/price)*100:.1f}%") 
-            else:
-                st.warning("N/A")
+            if g: st.metric("Value", f"${g:.2f}", f"{((g-price)/price)*100:.1f}%") 
+            else: st.warning("N/A")
                 
         with c2:
             st.markdown("##### 2. Peter Lynch"); st.caption("Growth")
             l = models.get('Peter Lynch Value')
-            if l:
-                st.metric("Value", f"${l:.2f}", f"{((l-price)/price)*100:.1f}%")
-            else:
-                st.warning("N/A")
+            if l: st.metric("Value", f"${l:.2f}", f"{((l-price)/price)*100:.1f}%")
+            else: st.warning("N/A")
                 
         with c3:
             st.markdown("##### 3. DCF"); st.caption("Intrinsic")
             dg = st.slider(f"Growth", 0.0, 0.25, float(implied_growth), 0.01)
             d = calculate_dcf(val_ticker, dg)
-            if d:
-                st.metric("Value", f"${d:.2f}", f"{((d-price)/price)*100:.1f}%")
-            else:
-                st.warning("N/A")
+            if d: st.metric("Value", f"${d:.2f}", f"{((d-price)/price)*100:.1f}%")
+            else: st.warning("N/A")
 
 with tab4: # BACKTEST TAB
     st.subheader("📜 1-Year Backtest")
