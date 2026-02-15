@@ -6,6 +6,8 @@ import plotly.express as px
 from plotly.subplots import make_subplots
 import numpy as np
 from textblob import TextBlob
+import requests
+import xml.etree.ElementTree as ET
 
 # --- Page Configuration ---
 st.set_page_config(page_title="Philip's Pocket Analyst Pro", layout="wide")
@@ -66,36 +68,60 @@ def get_sector_performance(sector, period="3mo"):
         return 0, 'SPY'
     return 0, 'SPY'
 
+def get_google_news(ticker):
+    """Fallback: Fetches news from Google RSS if Yahoo fails."""
+    try:
+        # Standard Google News RSS Feed
+        url = f"https://news.google.com/rss/search?q={ticker}+stock&hl=en-US&gl=US&ceid=US:en"
+        response = requests.get(url, timeout=5)
+        root = ET.fromstring(response.content)
+        
+        headlines = []
+        for item in root.findall('.//item')[:5]:
+            title = item.find('title').text
+            link = item.find('link').text
+            # Clean up Google's title (often includes " - Publisher Name")
+            title = title.split(' - ')[0]
+            
+            blob = TextBlob(title)
+            score = blob.sentiment.polarity
+            headlines.append({"title": title, "score": score, "link": link})
+            
+        return headlines
+    except:
+        return []
+
 def get_news_sentiment(ticker):
-    """Fetches news and formats them as clickable links."""
+    """Hybrid News Engine: Tries Yahoo, falls back to Google."""
+    sentiment_score = 0
+    headlines = []
+    
+    # 1. Try Yahoo Finance First
     try:
         stock = yf.Ticker(ticker)
         news = stock.news
-        
-        if not news: return 0, []
-        
-        sentiment_score = 0
-        headlines = []
-        count = 0
-        
-        for item in news[:5]: 
-            title = item.get('title', '')
-            link = item.get('link', '#')
-            
-            if title:
-                blob = TextBlob(title)
-                score = blob.sentiment.polarity
-                sentiment_score += score
-                headlines.append({"title": title, "score": score, "link": link})
-                count += 1
-                
-        if count > 0:
-            avg_score = sentiment_score / count
-            return avg_score, headlines
-        else:
-            return 0, []
+        if news:
+            for item in news[:5]:
+                title = item.get('title', '')
+                link = item.get('link', '#')
+                if title:
+                    blob = TextBlob(title)
+                    score = blob.sentiment.polarity
+                    headlines.append({"title": title, "score": score, "link": link})
     except:
-        return 0, []
+        pass # Yahoo failed, move to fallback
+
+    # 2. If Yahoo failed (empty list), use Google News
+    if not headlines:
+        headlines = get_google_news(ticker)
+    
+    # 3. Calculate Average Sentiment
+    if headlines:
+        total_score = sum(h['score'] for h in headlines)
+        avg_score = total_score / len(headlines)
+        return avg_score, headlines
+    
+    return 0, []
 
 def analyze_stock(ticker):
     """Buy/Sell/Hold Logic + Sector Comparison."""
@@ -200,10 +226,7 @@ with st.sidebar:
     watchlist_names = list(st.session_state.watchlists.keys())
     selected_list_name = st.selectbox("Select Watchlist", watchlist_names, index=watchlist_names.index(st.session_state.active_list))
     st.session_state.active_list = selected_list_name
-    
-    # --- THIS WAS THE BROKEN LINE ---
     current_tickers = st.session_state.watchlists[st.session_state.active_list]
-    # --------------------------------
     
     st.code(", ".join(current_tickers))
     st.divider()
@@ -263,17 +286,23 @@ with tab1:
             c1, c2 = st.columns([2, 1])
             with c1: st.plotly_chart(create_chart(ticker), use_container_width=True)
             with c2:
+                # --- NEW: AI SENTIMENT (Hybrid Engine) ---
                 st.write("**🤖 AI News Sentiment**")
+                
                 sentiment, headlines = get_news_sentiment(ticker)
                 
                 if sentiment > 0.1: st.success(f"😊 Positive ({sentiment:.2f})")
                 elif sentiment < -0.1: st.error(f"😡 Negative ({sentiment:.2f})")
                 else: st.warning(f"😐 Neutral ({sentiment:.2f})")
                 
-                st.write("**Latest Headlines:**")
-                for h in headlines[:3]:
-                    icon = "🟢" if h['score'] > 0 else "🔴" if h['score'] < 0 else "⚪"
-                    st.markdown(f"[{icon} {h['title']}]({h['link']})")
+                if headlines:
+                    st.caption(f"Source: {'Google News' if 'google' in headlines[0]['link'] else 'Yahoo Finance'}")
+                    st.write("**Latest Headlines:**")
+                    for h in headlines[:3]:
+                        icon = "🟢" if h['score'] > 0 else "🔴" if h['score'] < 0 else "⚪"
+                        st.markdown(f"[{icon} {h['title']}]({h['link']})")
+                else:
+                    st.info("No recent news found.")
 
                 st.write("---")
                 alpha = display_row['Alpha']
@@ -284,17 +313,39 @@ with tab2: # Risk Tab
     st.subheader("⚠️ Sector Power Rankings")
     if results:
         sector_df = pd.DataFrame(results).groupby("Sector")['Score'].mean().reset_index().sort_values("Score", ascending=False)
-        
-        # This is the part that was breaking
         fig_sec = px.bar(
-            sector_df, 
-            x="Score", 
-            y="Sector", 
-            orientation='h', 
-            color="Score", 
-            color_continuous_scale=["red", "yellow", "green"], 
-            range_color=[0, 100], 
-            text_auto=True
+            sector_df, x="Score", y="Sector", orientation='h', color="Score", 
+            color_continuous_scale=["red", "yellow", "green"], range_color=[0, 100], text_auto=True
         )
-        
         st.plotly_chart(fig_sec, use_container_width=True)
+
+with tab3: # VALUATION TAB
+    val_ticker = st.session_state.selected_ticker
+    if not val_ticker and current_tickers: val_ticker = current_tickers[0]
+
+    st.subheader(f"💎 Triangulated Valuation: {val_ticker}")
+    if val_ticker:
+        models, price, implied_growth = get_valuation_models(val_ticker)
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            st.markdown("##### 1. Graham Number"); st.caption("Conservative")
+            g = models.get('Graham Number')
+            st.metric("Value", f"${g:.2f}", f"{((g-price)/price)*100:.1f}%") if g else st.warning("N/A")
+        with c2:
+            st.markdown("##### 2. Peter Lynch"); st.caption("Growth")
+            l = models.get('Peter Lynch Value')
+            st.metric("Value", f"${l:.2f}", f"{((l-price)/price)*100:.1f}%") if l else st.warning("N/A")
+        with c3:
+            st.markdown("##### 3. DCF"); st.caption("Intrinsic")
+            dg = st.slider(f"Growth", 0.0, 0.25, float(implied_growth), 0.01)
+            d = calculate_dcf(val_ticker, dg)
+            st.metric("Value", f"${d:.2f}", f"{((d-price)/price)*100:.1f}%") if d else st.warning("N/A")
+
+with tab4: # BACKTEST TAB
+    st.subheader("📜 1-Year Backtest")
+    if current_tickers:
+        try:
+            data = yf.download(current_tickers, period="1y", progress=False)
+            if 'Close' in data.columns: st.line_chart(data['Close'])
+            else: st.line_chart(data)
+        except: st.error("Data error")
