@@ -171,14 +171,10 @@ def analyze_stock(ticker):
         if alpha > 5: score += 10; reasons.append(f"🚀 Crushing {sector_etf}")
         elif alpha < -5: score -= 5; reasons.append(f"🐢 Lagging {sector_etf}")
 
-        # --- BUILD KEY INDICATORS ---
-        # 1. Trend
+        # --- KEY INDICATORS ---
         trend_icon = "📈" if current_price > sma_50 else "📉"
-        # 2. Valuation
         val_icon = "🏷️" if pe_ratio < 25 else "⚡"
-        # 3. Alpha (Performance vs Sector)
         alpha_icon = "🏆" if alpha > 0 else "🐢"
-        
         key_indicators = f"{trend_icon} {val_icon} {alpha_icon}"
 
         if score >= 80: verdict = "STRONG BUY"
@@ -195,7 +191,7 @@ def analyze_stock(ticker):
             "Price": current_price, 
             "Score": score,
             "Verdict": verdict, 
-            "Key Indicators": key_indicators, # NEW COLUMN
+            "Key Indicators": key_indicators,
             "Trend": trend_status, 
             "Sector": sector,
             "Sector ETF": sector_etf, 
@@ -238,27 +234,53 @@ def get_valuation_models(ticker):
         return models, price, growth_est, target_mean, target_low, target_high, num_analysts
     except: return {}, 0, 0.05, None, None, None, None
 
-# --- 4. Sidebar ---
+# --- 4. Sidebar: Portfolio Manager ---
 with st.sidebar:
     st.title("📂 Portfolio Manager")
+
+    # SECTION 1: WATCHLIST SELECTOR
     watchlist_names = list(st.session_state.watchlists.keys())
     selected_list_name = st.selectbox("Select Watchlist", watchlist_names, index=watchlist_names.index(st.session_state.active_list))
     st.session_state.active_list = selected_list_name
     current_tickers = st.session_state.watchlists[st.session_state.active_list]
     
+    st.write(f"**Current: {len(current_tickers)} Stocks**")
     st.code(", ".join(current_tickers))
+    
     st.divider()
-    new_ticker = st.text_input("Add Ticker").upper()
-    if st.button("Add Stock"):
-        if new_ticker and new_ticker not in current_tickers:
-            st.session_state.watchlists[st.session_state.active_list].append(new_ticker)
-            st.rerun()
+
+    # SECTION 2: EDIT CURRENT LIST
+    with st.expander("📝 Edit Current List", expanded=True):
+        # ADD
+        new_ticker = st.text_input("Add Ticker").upper()
+        if st.button("Add ➕"):
+            if new_ticker and new_ticker not in current_tickers:
+                st.session_state.watchlists[st.session_state.active_list].append(new_ticker)
+                st.rerun()
+        
+        # REMOVE
+        if current_tickers:
+            remove_ticker = st.selectbox("Remove Ticker", ["Select..."] + current_tickers)
+            if st.button("Remove ➖"):
+                if remove_ticker != "Select...":
+                    st.session_state.watchlists[st.session_state.active_list].remove(remove_ticker)
+                    st.rerun()
+
+    # SECTION 3: CREATE NEW LIST
+    with st.expander("➕ Create New Watchlist"):
+        new_list_name = st.text_input("New List Name (e.g., 'Crypto')")
+        if st.button("Create List"):
+            if new_list_name and new_list_name not in st.session_state.watchlists:
+                st.session_state.watchlists[new_list_name] = []
+                st.session_state.active_list = new_list_name
+                st.success(f"Created '{new_list_name}'!")
+                st.rerun()
 
 # --- 5. Main Dashboard ---
 st.title(f"📱 Pocket Analyst: {st.session_state.active_list}")
 
 if not current_tickers:
-    st.warning("Empty Watchlist!")
+    st.info("👋 This watchlist is empty! Use the sidebar to add some tickers.")
     st.stop()
 
 tab1, tab2, tab3, tab4 = st.tabs(["📊 Analysis", "⚠️ Risk & Sectors", "💎 Valuation", "🔙 Backtest"])
@@ -275,10 +297,8 @@ with tab1:
         df = df.sort_values(by="Score", ascending=False)
         st.info("👇 Select a stock to view details (Selection syncs to Valuation Tab)")
         
-        # --- UPDATE TABLE COLUMNS ---
         selection = st.dataframe(
             df,
-            # Added "Key Indicators" to the view
             column_order=("Ticker", "Verdict", "Key Indicators", "Score", "Price", "Sector", "Upside %"),
             hide_index=True,
             width='stretch',
@@ -324,10 +344,9 @@ with tab1:
                     st.info("No recent news found.")
                 
                 st.write("---")
-                # Legend for Key Indicators
                 with st.expander("ℹ️ Key Indicators Legend"):
-                    st.write("📈/📉: Price Trend (vs 50-Day Moving Average)")
-                    st.write("🏷️/⚡: Valuation (Cheap vs Premium P/E)")
+                    st.write("📈/📉: Price Trend")
+                    st.write("🏷️/⚡: Valuation (Cheap vs Premium)")
                     st.write("🏆/🐢: Performance (Beating vs Lagging Sector)")
                 
                 alpha = display_row['Alpha']
