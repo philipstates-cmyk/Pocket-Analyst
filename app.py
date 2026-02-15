@@ -200,7 +200,6 @@ def get_valuation_models(ticker):
         book_value = info.get('bookValue', 0)
         growth_est = info.get('earningsGrowth', 0) 
         
-        # New Analyst Data
         target_mean = info.get('targetMeanPrice')
         target_low = info.get('targetLowPrice')
         target_high = info.get('targetHighPrice')
@@ -242,7 +241,7 @@ if not current_tickers:
     st.warning("Empty Watchlist!")
     st.stop()
 
-tab1, tab2, tab3, tab4 = st.tabs(["📊 Analysis", "⚠️ Risk & Sectors", "💎 Valuation Reality Check", "🔙 Backtest"])
+tab1, tab2, tab3, tab4 = st.tabs(["📊 Analysis", "⚠️ Risk & Sectors", "💎 Valuation", "🔙 Backtest"])
 
 with tab1:
     results = []
@@ -305,7 +304,6 @@ with tab1:
                 alpha = display_row['Alpha']
                 if alpha > 0: st.success(f"🚀 Beating Sector by {alpha:.1f}%")
                 else: st.error(f"🐢 Lagging Sector by {abs(alpha):.1f}%")
-
 with tab2: # RISK DASHBOARD
     val_ticker = st.session_state.selected_ticker
     if not val_ticker and current_tickers: val_ticker = current_tickers[0]
@@ -340,16 +338,14 @@ with tab2: # RISK DASHBOARD
         risk_df['Sharpe Ratio'] = risk_df['Sharpe Ratio'].apply(lambda x: f"{x:.2f}")
         st.dataframe(risk_df, hide_index=True, width='stretch')
 
-with tab3: # REVISED VALUATION TAB (WALL STREET REALITY CHECK)
+with tab3: # VALUATION TAB
     val_ticker = st.session_state.selected_ticker
     if not val_ticker and current_tickers: val_ticker = current_tickers[0]
 
     st.subheader(f"💎 Valuation Reality Check: {val_ticker}")
     if val_ticker:
-        # Get Analyst Data
         models, price, implied_growth, t_mean, t_low, t_high, n_analysts = get_valuation_models(val_ticker)
         
-        # 1. Analyst Consensus Card
         st.write("#### 1. What does Wall Street think?")
         if t_mean:
             c1, c2, c3 = st.columns(3)
@@ -358,18 +354,15 @@ with tab3: # REVISED VALUATION TAB (WALL STREET REALITY CHECK)
             with c3: st.metric("Highest Target", f"${t_high:.2f}")
             st.caption(f"Based on {n_analysts} analyst opinions.")
             
-            # Progress Bar for Price Position
             if t_high > t_low:
                 progress = (price - t_low) / (t_high - t_low)
-                progress = max(0.0, min(1.0, progress)) # Clamp between 0 and 1
+                progress = max(0.0, min(1.0, progress)) 
                 st.progress(progress)
                 st.text(f"Low (${t_low}) <--- Current Price (${price:.2f}) ---> High (${t_high})")
         else:
             st.warning("No Analyst Coverage found for this stock.")
 
         st.divider()
-        
-        # 2. Historical Models
         st.write("#### 2. What do the Math Models say?")
         m1, m2 = st.columns(2)
         with m1:
@@ -386,11 +379,52 @@ with tab3: # REVISED VALUATION TAB (WALL STREET REALITY CHECK)
             else: st.warning("N/A (No Growth)")
             st.caption("Best for: Fast growers (Tech, Consumer Discretionary).")
 
-with tab4: # BACKTEST TAB
-    st.subheader("📜 1-Year Backtest")
+with tab4: # BACKTEST TAB (THE GROWTH OF $10K)
+    st.subheader("📜 Backtest: Growth of $10,000 (1 Year)")
+    
     if current_tickers:
-        try:
-            data = yf.download(current_tickers, period="1y", progress=False)
-            if 'Close' in data.columns: st.line_chart(data['Close'])
-            else: st.line_chart(data)
-        except: st.error("Data error")
+        with st.spinner("Simulating Portfolio Performance..."):
+            try:
+                # 1. Download Data (Portfolio + Benchmark)
+                tickers_to_download = current_tickers + ['SPY']
+                data = yf.download(tickers_to_download, period="1y", progress=False)['Close']
+                
+                if not data.empty:
+                    # 2. Normalize to $10,000 Start
+                    # (Current Price / Start Price) * 10,000
+                    normalized_data = (data / data.iloc[0]) * 10000
+                    
+                    # 3. Calculate "My Portfolio" (Equal Weight Average)
+                    # We average the growth of all stocks in the active list (excluding SPY)
+                    portfolio_stocks = normalized_data[current_tickers]
+                    normalized_data['My Portfolio'] = portfolio_stocks.mean(axis=1)
+                    
+                    # 4. Plot Comparison (Portfolio vs SPY)
+                    fig_bt = px.line(
+                        normalized_data, 
+                        y=['My Portfolio', 'SPY'],
+                        labels={"value": "Portfolio Value ($)", "variable": "Strategy"},
+                        color_discrete_map={"My Portfolio": "#00CC96", "SPY": "#EF553B"}
+                    )
+                    
+                    # Add 'Break Even' line
+                    fig_bt.add_hline(y=10000, line_dash="dot", line_color="white", opacity=0.5)
+                    
+                    st.plotly_chart(fig_bt, width='stretch')
+                    
+                    # 5. Final Stats
+                    end_val = normalized_data['My Portfolio'].iloc[-1]
+                    spy_val = normalized_data['SPY'].iloc[-1]
+                    
+                    c1, c2 = st.columns(2)
+                    c1.metric("My Portfolio Value", f"${end_val:,.0f}", f"{((end_val-10000)/10000)*100:.1f}% Return")
+                    c2.metric("S&P 500 Value", f"${spy_val:,.0f}", f"{((spy_val-10000)/10000)*100:.1f}% Return")
+                    
+                    if end_val > spy_val:
+                        st.success(f"🚀 You beat the market by ${end_val - spy_val:,.0f}!")
+                    else:
+                        st.error(f"🐢 You trailed the market by ${spy_val - end_val:,.0f}.")
+                else:
+                    st.warning("No data available for backtest.")
+            except Exception as e:
+                st.error(f"Backtest Error: {e}")
