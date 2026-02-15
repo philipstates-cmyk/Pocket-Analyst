@@ -6,4 +6,3 @@ statsmodels
 numpy
 textblob
 requests
-xml.etree.ElementTree

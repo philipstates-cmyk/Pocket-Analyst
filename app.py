@@ -71,7 +71,6 @@ def get_sector_performance(sector, period="3mo"):
 def get_google_news(ticker):
     """Fallback: Fetches news from Google RSS if Yahoo fails."""
     try:
-        # Standard Google News RSS Feed
         url = f"https://news.google.com/rss/search?q={ticker}+stock&hl=en-US&gl=US&ceid=US:en"
         response = requests.get(url, timeout=5)
         root = ET.fromstring(response.content)
@@ -80,7 +79,6 @@ def get_google_news(ticker):
         for item in root.findall('.//item')[:5]:
             title = item.find('title').text
             link = item.find('link').text
-            # Clean up Google's title (often includes " - Publisher Name")
             title = title.split(' - ')[0]
             
             blob = TextBlob(title)
@@ -96,7 +94,7 @@ def get_news_sentiment(ticker):
     sentiment_score = 0
     headlines = []
     
-    # 1. Try Yahoo Finance First
+    # 1. Try Yahoo Finance
     try:
         stock = yf.Ticker(ticker)
         news = stock.news
@@ -109,13 +107,13 @@ def get_news_sentiment(ticker):
                     score = blob.sentiment.polarity
                     headlines.append({"title": title, "score": score, "link": link})
     except:
-        pass # Yahoo failed, move to fallback
+        pass 
 
-    # 2. If Yahoo failed (empty list), use Google News
+    # 2. Fallback to Google News
     if not headlines:
         headlines = get_google_news(ticker)
     
-    # 3. Calculate Average Sentiment
+    # 3. Calculate Average
     if headlines:
         total_score = sum(h['score'] for h in headlines)
         avg_score = total_score / len(headlines)
@@ -257,16 +255,17 @@ with tab1:
         df = df.sort_values(by="Score", ascending=False)
         st.info("👇 Select a stock to view details (Selection syncs to Valuation Tab)")
         
+        # UPDATED: Replaced use_container_width with width='stretch'
         selection = st.dataframe(
             df,
             column_order=("Ticker", "Verdict", "Score", "Trend", "Price", "Sector", "Upside %"),
             hide_index=True,
-            use_container_width=True,
+            width='stretch',  # <--- FIXED HERE
             on_select="rerun",
             selection_mode="single-row"
         )
         
-        # --- ROBUST SELECTION LOGIC ---
+        # --- SELECTION LOGIC ---
         if st.session_state.selected_ticker is None and not df.empty:
             st.session_state.selected_ticker = df.iloc[0]['Ticker']
 
@@ -284,9 +283,10 @@ with tab1:
             st.divider()
             st.subheader(f"🏆 Deep Dive: {ticker} vs. {sector} ({etf})")
             c1, c2 = st.columns([2, 1])
-            with c1: st.plotly_chart(create_chart(ticker), use_container_width=True)
+            with c1: 
+                # UPDATED: width='stretch'
+                st.plotly_chart(create_chart(ticker), width='stretch') 
             with c2:
-                # --- NEW: AI SENTIMENT (Hybrid Engine) ---
                 st.write("**🤖 AI News Sentiment**")
                 
                 sentiment, headlines = get_news_sentiment(ticker)
@@ -317,7 +317,8 @@ with tab2: # Risk Tab
             sector_df, x="Score", y="Sector", orientation='h', color="Score", 
             color_continuous_scale=["red", "yellow", "green"], range_color=[0, 100], text_auto=True
         )
-        st.plotly_chart(fig_sec, use_container_width=True)
+        # UPDATED: width='stretch'
+        st.plotly_chart(fig_sec, width='stretch')
 
 with tab3: # VALUATION TAB
     val_ticker = st.session_state.selected_ticker
