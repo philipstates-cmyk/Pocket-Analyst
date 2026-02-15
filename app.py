@@ -206,17 +206,22 @@ def get_valuation_models(ticker):
         num_analysts = info.get('numberOfAnalystOpinions')
         
         models = {}
+        # Graham Number
         if eps and eps > 0 and book_value and book_value > 0:
             models['Graham Number'] = np.sqrt(22.5 * eps * book_value)
-        else: models['Graham Number'] = None
+        else: 
+            models['Graham Number'] = None
             
+        # Peter Lynch Value (The Fixed Part)
         growth_rate_whole = min((growth_est or 0.05) * 100, 25) 
         if eps and eps > 0 and growth_rate_whole > 0:
-models['Peter Lynch Value'] = eps * growth_rate_whole
-        else: models['Peter Lynch Value'] = None
+            models['Peter Lynch Value'] = eps * growth_rate_whole
+        else: 
+            models['Peter Lynch Value'] = None
             
         return models, price, growth_est, target_mean, target_low, target_high, num_analysts
-    except: return {}, 0, 0.05, None, None, None, None
+    except: 
+        return {}, 0, 0.05, None, None, None, None
 
 # --- 4. Sidebar ---
 with st.sidebar:
@@ -393,34 +398,41 @@ with tab4: # BACKTEST TAB (SELECTED STOCK vs SPY)
                 tickers_to_download = [val_ticker, 'SPY']
                 data = yf.download(tickers_to_download, period="1y", progress=False)['Close']
                 
-                if not data.empty and val_ticker in data.columns:
+                # Check if data download was successful and has correct columns
+                if not data.empty and val_ticker in data.columns and 'SPY' in data.columns:
                     # 2. Normalize to $10,000 Start
-                    normalized_data = (data / data.iloc[0]) * 10000
+                    # We select just the two columns we need to avoid any multi-index confusion
+                    fight_data = data[[val_ticker, 'SPY']].dropna()
                     
-                    # 3. Plot Comparison
-                    fig_bt = px.line(
-                        normalized_data, 
-                        y=[val_ticker, 'SPY'],
-                        labels={"value": "Investment Value ($)", "variable": "Ticker"},
-                        color_discrete_map={val_ticker: "#00CC96", "SPY": "#EF553B"}
-                    )
-                    
-                    fig_bt.add_hline(y=10000, line_dash="dot", line_color="white", opacity=0.5)
-                    st.plotly_chart(fig_bt, width='stretch')
-                    
-                    # 4. Final Stats
-                    stock_end = normalized_data[val_ticker].iloc[-1]
-                    spy_end = normalized_data['SPY'].iloc[-1]
-                    
-                    c1, c2 = st.columns(2)
-                    c1.metric(f"{val_ticker} Final Value", f"${stock_end:,.0f}", f"{((stock_end-10000)/10000)*100:.1f}% Return")
-                    c2.metric("S&P 500 Final Value", f"${spy_end:,.0f}", f"{((spy_end-10000)/10000)*100:.1f}% Return")
-                    
-                    if stock_end > spy_end:
-                        st.success(f"🚀 {val_ticker} beat the market by ${stock_end - spy_end:,.0f}!")
+                    if not fight_data.empty:
+                        normalized_data = (fight_data / fight_data.iloc[0]) * 10000
+                        
+                        # 3. Plot Comparison
+                        fig_bt = px.line(
+                            normalized_data, 
+                            y=[val_ticker, 'SPY'],
+                            labels={"value": "Investment Value ($)", "variable": "Ticker"},
+                            color_discrete_map={val_ticker: "#00CC96", "SPY": "#EF553B"}
+                        )
+                        
+                        fig_bt.add_hline(y=10000, line_dash="dot", line_color="white", opacity=0.5)
+                        st.plotly_chart(fig_bt, width='stretch')
+                        
+                        # 4. Final Stats
+                        stock_end = normalized_data[val_ticker].iloc[-1]
+                        spy_end = normalized_data['SPY'].iloc[-1]
+                        
+                        c1, c2 = st.columns(2)
+                        c1.metric(f"{val_ticker} Final Value", f"${stock_end:,.0f}", f"{((stock_end-10000)/10000)*100:.1f}% Return")
+                        c2.metric("S&P 500 Final Value", f"${spy_end:,.0f}", f"{((spy_end-10000)/10000)*100:.1f}% Return")
+                        
+                        if stock_end > spy_end:
+                            st.success(f"🚀 {val_ticker} beat the market by ${stock_end - spy_end:,.0f}!")
+                        else:
+                            st.error(f"🐢 {val_ticker} trailed the market by ${spy_end - stock_end:,.0f}.")
                     else:
-                        st.error(f"🐢 {val_ticker} trailed the market by ${spy_end - stock_end:,.0f}.")
+                         st.warning(f"Not enough data overlap to compare {val_ticker} and SPY.")
                 else:
-                    st.warning(f"Could not retrieve backtest data for {val_ticker}.")
+                    st.warning(f"Could not retrieve backtest data for {val_ticker}. (Ticker might be new or delisted)")
             except Exception as e:
                 st.error(f"Backtest Error: {e}")
