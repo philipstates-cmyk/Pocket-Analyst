@@ -22,7 +22,6 @@ if 'watchlists' not in st.session_state:
 if 'active_list' not in st.session_state:
     st.session_state.active_list = 'Default'
 
-# Initialize Selected Ticker
 if 'selected_ticker' not in st.session_state:
     st.session_state.selected_ticker = None 
 
@@ -200,34 +199,25 @@ def get_valuation_models(ticker):
         eps = info.get('trailingEps', 0)
         book_value = info.get('bookValue', 0)
         growth_est = info.get('earningsGrowth', 0) 
-        if growth_est is None: growth_est = 0.05 
+        
+        # New Analyst Data
+        target_mean = info.get('targetMeanPrice')
+        target_low = info.get('targetLowPrice')
+        target_high = info.get('targetHighPrice')
+        num_analysts = info.get('numberOfAnalystOpinions')
         
         models = {}
         if eps and eps > 0 and book_value and book_value > 0:
             models['Graham Number'] = np.sqrt(22.5 * eps * book_value)
         else: models['Graham Number'] = None
-        growth_rate_whole = min(growth_est * 100, 25) 
+            
+        growth_rate_whole = min((growth_est or 0.05) * 100, 25) 
         if eps and eps > 0 and growth_rate_whole > 0:
             models['Peter Lynch Value'] = eps * growth_rate_whole
         else: models['Peter Lynch Value'] = None
-        return models, price, growth_est
-    except: return {}, 0, 0.05
-
-def calculate_dcf(ticker, growth_rate, discount_rate=0.10, years=5):
-    try:
-        stock = yf.Ticker(ticker)
-        info = stock.info
-        fcf = info.get('freeCashFlow', info.get('operatingCashflows', None))
-        shares = info.get('sharesOutstanding', 1)
-        if fcf is None or shares is None: return None
-        future_fcf = []
-        for i in range(1, years + 1):
-            fcf = fcf * (1 + growth_rate)
-            future_fcf.append(fcf / ((1 + discount_rate) ** i))
-        terminal_value = (fcf * (1 + 0.02)) / (discount_rate - 0.02)
-        pv_terminal = terminal_value / ((1 + discount_rate) ** years)
-        return (sum(future_fcf) + pv_terminal) / shares
-    except: return None
+            
+        return models, price, growth_est, target_mean, target_low, target_high, num_analysts
+    except: return {}, 0, 0.05, None, None, None, None
 
 # --- 4. Sidebar ---
 with st.sidebar:
@@ -252,7 +242,7 @@ if not current_tickers:
     st.warning("Empty Watchlist!")
     st.stop()
 
-tab1, tab2, tab3, tab4 = st.tabs(["📊 Analysis", "⚠️ Risk & Sectors", "💎 Valuation Models", "🔙 Backtest"])
+tab1, tab2, tab3, tab4 = st.tabs(["📊 Analysis", "⚠️ Risk & Sectors", "💎 Valuation Reality Check", "🔙 Backtest"])
 
 with tab1:
     results = []
@@ -266,8 +256,6 @@ with tab1:
         df = df.sort_values(by="Score", ascending=False)
         st.info("👇 Select a stock to view details (Selection syncs to Valuation Tab)")
         
-        # --- FIXED SELECTION LOGIC ---
-        # 1. ADD KEY: Giving the dataframe a fixed key stops it from resetting
         selection = st.dataframe(
             df,
             column_order=("Ticker", "Verdict", "Score", "Trend", "Price", "Sector", "Upside %"),
@@ -275,21 +263,17 @@ with tab1:
             width='stretch',
             on_select="rerun",
             selection_mode="single-row",
-            key="analysis_table" # <--- THIS IS THE FIX
+            key="analysis_table"
         )
         
-        # 2. SAFETY CHECK: Only update if a row is ACTUALLY selected.
-        # If selection.selection.rows is empty (happens on tab switch), we SKIP this block
-        # so we don't overwrite the existing selection with nothing.
         if selection.selection.rows:
             idx = selection.selection.rows[0]
             selected_row = df.iloc[idx]
             st.session_state.selected_ticker = selected_row['Ticker']
-# 3. FALLBACK: If session state is still empty (first load), pick the top stock
+            
         if st.session_state.selected_ticker is None and not df.empty:
             st.session_state.selected_ticker = df.iloc[0]['Ticker']
             
-        # 4. DISPLAY: Use the variable from Session State
         if st.session_state.selected_ticker in df['Ticker'].values:
             display_row = df[df['Ticker'] == st.session_state.selected_ticker].iloc[0]
             
@@ -317,21 +301,18 @@ with tab1:
                         st.markdown(f"[{icon} {h['title']}]({h['link']})")
                 else:
                     st.info("No recent news found.")
-
                 st.write("---")
                 alpha = display_row['Alpha']
                 if alpha > 0: st.success(f"🚀 Beating Sector by {alpha:.1f}%")
                 else: st.error(f"🐢 Lagging Sector by {abs(alpha):.1f}%")
 
-with tab2: # RISK & SECTOR DASHBOARD
+with tab2: # RISK DASHBOARD
     val_ticker = st.session_state.selected_ticker
     if not val_ticker and current_tickers: val_ticker = current_tickers[0]
     
     st.subheader(f"⚠️ Risk Profile: {val_ticker}")
-    
     if results:
         selected_risk_data = next((item for item in results if item["Ticker"] == val_ticker), None)
-        
         if selected_risk_data:
             c1, c2, c3 = st.columns(3)
             with c1: st.metric("Volatility", f"{selected_risk_data['Volatility']:.1f}%")
@@ -345,7 +326,6 @@ with tab2: # RISK & SECTOR DASHBOARD
         
     st.divider()
     st.subheader("🏭 Portfolio Heatmap")
-    
     if results:
         fig_tree = px.treemap(
             df, path=[px.Constant("Portfolio"), 'Sector', 'Ticker'], 
@@ -360,30 +340,51 @@ with tab2: # RISK & SECTOR DASHBOARD
         risk_df['Sharpe Ratio'] = risk_df['Sharpe Ratio'].apply(lambda x: f"{x:.2f}")
         st.dataframe(risk_df, hide_index=True, width='stretch')
 
-with tab3: # VALUATION TAB
+with tab3: # REVISED VALUATION TAB (WALL STREET REALITY CHECK)
     val_ticker = st.session_state.selected_ticker
     if not val_ticker and current_tickers: val_ticker = current_tickers[0]
 
-    st.subheader(f"💎 Triangulated Valuation: {val_ticker}")
+    st.subheader(f"💎 Valuation Reality Check: {val_ticker}")
     if val_ticker:
-        models, price, implied_growth = get_valuation_models(val_ticker)
-        c1, c2, c3 = st.columns(3)
-        with c1:
-            st.markdown("##### 1. Graham Number"); st.caption("Conservative")
+        # Get Analyst Data
+        models, price, implied_growth, t_mean, t_low, t_high, n_analysts = get_valuation_models(val_ticker)
+        
+        # 1. Analyst Consensus Card
+        st.write("#### 1. What does Wall Street think?")
+        if t_mean:
+            c1, c2, c3 = st.columns(3)
+            with c1: st.metric("Analyst Target", f"${t_mean:.2f}", f"{((t_mean-price)/price)*100:.1f}% Upside")
+            with c2: st.metric("Lowest Target", f"${t_low:.2f}")
+            with c3: st.metric("Highest Target", f"${t_high:.2f}")
+            st.caption(f"Based on {n_analysts} analyst opinions.")
+            
+            # Progress Bar for Price Position
+            if t_high > t_low:
+                progress = (price - t_low) / (t_high - t_low)
+                progress = max(0.0, min(1.0, progress)) # Clamp between 0 and 1
+                st.progress(progress)
+                st.text(f"Low (${t_low}) <--- Current Price (${price:.2f}) ---> High (${t_high})")
+        else:
+            st.warning("No Analyst Coverage found for this stock.")
+
+        st.divider()
+        
+        # 2. Historical Models
+        st.write("#### 2. What do the Math Models say?")
+        m1, m2 = st.columns(2)
+        with m1:
+            st.info("**Graham Number (Conservative)**")
             g = models.get('Graham Number')
-            if g: st.metric("Value", f"${g:.2f}", f"{((g-price)/price)*100:.1f}%") 
-            else: st.warning("N/A")
-        with c2:
-            st.markdown("##### 2. Peter Lynch"); st.caption("Growth")
+            if g: st.metric("Fair Value", f"${g:.2f}", f"{((g-price)/price)*100:.1f}%")
+            else: st.warning("N/A (Unprofitable)")
+            st.caption("Best for: Stable, boring companies (Banks, Utilities).")
+            
+        with m2:
+            st.info("**Peter Lynch Value (Growth)**")
             l = models.get('Peter Lynch Value')
-            if l: st.metric("Value", f"${l:.2f}", f"{((l-price)/price)*100:.1f}%")
-            else: st.warning("N/A")
-        with c3:
-            st.markdown("##### 3. DCF"); st.caption("Intrinsic")
-            dg = st.slider(f"Growth", 0.0, 0.25, float(implied_growth), 0.01)
-            d = calculate_dcf(val_ticker, dg)
-            if d: st.metric("Value", f"${d:.2f}", f"{((d-price)/price)*100:.1f}%")
-            else: st.warning("N/A")
+            if l: st.metric("Fair Value", f"${l:.2f}", f"{((l-price)/price)*100:.1f}%")
+            else: st.warning("N/A (No Growth)")
+            st.caption("Best for: Fast growers (Tech, Consumer Discretionary).")
 
 with tab4: # BACKTEST TAB
     st.subheader("📜 1-Year Backtest")
