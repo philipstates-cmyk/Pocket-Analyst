@@ -255,17 +255,16 @@ with tab1:
         df = df.sort_values(by="Score", ascending=False)
         st.info("👇 Select a stock to view details (Selection syncs to Valuation Tab)")
         
-        # UPDATED: Replaced use_container_width with width='stretch'
         selection = st.dataframe(
             df,
             column_order=("Ticker", "Verdict", "Score", "Trend", "Price", "Sector", "Upside %"),
             hide_index=True,
-            width='stretch',  # <--- FIXED HERE
+            width='stretch',
             on_select="rerun",
             selection_mode="single-row"
         )
         
-        # --- SELECTION LOGIC ---
+        # --- ROBUST SELECTION LOGIC ---
         if st.session_state.selected_ticker is None and not df.empty:
             st.session_state.selected_ticker = df.iloc[0]['Ticker']
 
@@ -284,7 +283,6 @@ with tab1:
             st.subheader(f"🏆 Deep Dive: {ticker} vs. {sector} ({etf})")
             c1, c2 = st.columns([2, 1])
             with c1: 
-                # UPDATED: width='stretch'
                 st.plotly_chart(create_chart(ticker), width='stretch') 
             with c2:
                 st.write("**🤖 AI News Sentiment**")
@@ -317,10 +315,9 @@ with tab2: # Risk Tab
             sector_df, x="Score", y="Sector", orientation='h', color="Score", 
             color_continuous_scale=["red", "yellow", "green"], range_color=[0, 100], text_auto=True
         )
-        # UPDATED: width='stretch'
         st.plotly_chart(fig_sec, width='stretch')
 
-with tab3: # VALUATION TAB
+with tab3: # VALUATION TAB (Fixed Printing Issue)
     val_ticker = st.session_state.selected_ticker
     if not val_ticker and current_tickers: val_ticker = current_tickers[0]
 
@@ -328,19 +325,32 @@ with tab3: # VALUATION TAB
     if val_ticker:
         models, price, implied_growth = get_valuation_models(val_ticker)
         c1, c2, c3 = st.columns(3)
+        
+        # FIX: Replaced one-liners with proper if/else blocks to prevent printing
         with c1:
             st.markdown("##### 1. Graham Number"); st.caption("Conservative")
             g = models.get('Graham Number')
-            st.metric("Value", f"${g:.2f}", f"{((g-price)/price)*100:.1f}%") if g else st.warning("N/A")
+            if g:
+                st.metric("Value", f"${g:.2f}", f"{((g-price)/price)*100:.1f}%") 
+            else:
+                st.warning("N/A")
+                
         with c2:
             st.markdown("##### 2. Peter Lynch"); st.caption("Growth")
             l = models.get('Peter Lynch Value')
-            st.metric("Value", f"${l:.2f}", f"{((l-price)/price)*100:.1f}%") if l else st.warning("N/A")
+            if l:
+                st.metric("Value", f"${l:.2f}", f"{((l-price)/price)*100:.1f}%")
+            else:
+                st.warning("N/A")
+                
         with c3:
             st.markdown("##### 3. DCF"); st.caption("Intrinsic")
             dg = st.slider(f"Growth", 0.0, 0.25, float(implied_growth), 0.01)
             d = calculate_dcf(val_ticker, dg)
-            st.metric("Value", f"${d:.2f}", f"{((d-price)/price)*100:.1f}%") if d else st.warning("N/A")
+            if d:
+                st.metric("Value", f"${d:.2f}", f"{((d-price)/price)*100:.1f}%")
+            else:
+                st.warning("N/A")
 
 with tab4: # BACKTEST TAB
     st.subheader("📜 1-Year Backtest")
